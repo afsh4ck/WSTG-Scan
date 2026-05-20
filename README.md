@@ -138,13 +138,13 @@ Diseñada para bug bounty hunters y pentesters, automatiza tareas comunes de rec
 
 ## 🐘 WordPress & WPScan
 
-Si trabajas con objetivos WordPress, `WPScan` es una herramienta complementaria muy útil para enumeración y pruebas dirigidas. `WSTG Scanner` soporta integración manual (ejecuta `wpscan` por separado y añade los resultados a los reportes), y en futuras versiones se puede automatizar la ejecución desde el propio script.
+Si trabajas con objetivos WordPress, `WPScan` es una herramienta complementaria muy útil para enumeración y pruebas dirigidas. `WSTG Scanner` lo integra de manera automática, detectando si un sitio web utiliza WordPress para realizar una enumeración completa.
 
-Qué puedes hacer con `wpscan`:
-- Enumerar usuarios descubiertos y rutas de login.
-- Detectar versiones de core, plugins y temas.
-- Buscar vulnerabilidades conocidas (CVE) en plugins/themes.
-- Realizar fuerza bruta del login con wordlists.
+Que información obtiene con `wpscan`?:
+- Enumeración de usuarios descubiertos y rutas de login.
+- Detecta versiones de core, plugins y temas.
+- Busca vulnerabilidades conocidas (CVE) en plugins/themes.
+- Realiza fuerza bruta del login con wordlists.
 
 Instalación rápida:
 
