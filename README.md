@@ -134,45 +134,12 @@ Diseñada para bug bounty hunters y pentesters, automatiza tareas comunes de rec
 - **Open Redirect** – Detección de redirecciones a hosts arbitrarios
 - Reutiliza los formularios e inputs detectados por el spider (eficiente)
 
----
-
-## 🐘 WordPress & WPScan
-
-Si trabajas con objetivos WordPress, `WPScan` es una herramienta complementaria muy útil para enumeración y pruebas dirigidas. `WSTG Scanner` lo integra de manera automática, detectando si un sitio web utiliza WordPress para realizar una enumeración completa.
-
-Que información obtiene con `wpscan`?:
-- Enumeración de usuarios descubiertos y rutas de login.
+### 🐘 Enumeración y ataques WordPress
+- Enumeración de usuarios y rutas de login.
 - Detecta versiones de core, plugins y temas.
 - Busca vulnerabilidades conocidas (CVE) en plugins/themes.
 - Realiza fuerza bruta del login con wordlists.
 
-Instalación rápida:
-
-```bash
-sudo apt install wpscan
-# o via gem:
-sudo gem install wpscan
-```
-
-Ejemplos básicos:
-
-```bash
-# Enumeración básica (plugins/themes/users)
-wpscan --url https://target.example.com --enumerate ap,at,u
-
-# Fuerza bruta con wordlist
-wpscan --url https://target.example.com --usernames admin --passwords /path/to/passwords.txt
-
-# Guardar en JSON para importar al reporte
-wpscan --url https://target.example.com -o wpscan-output.json --format json
-```
-
-Integración con `WSTG Scanner`:
-- Ejecuta `wpscan` y guarda `wpscan-output.json` en `reports/<host>/` para conservar los hallazgos.
-- Si quieres que automatice la ejecución de `wpscan` desde `wstg-scan.py`, puedo añadir esa opción (parseo JSON y volcado a `FINDINGS`).
-
-Advertencia legal:
-- Solo ejecuta `wpscan` contra objetivos para los que tengas permiso explícito.
 ### 🔌 Testing de APIs (OWASP API Top 10)
 - **Descubrimiento de endpoints** (`/api`, `/swagger`, `/graphql`, `/actuator`, etc.) y parsing de OpenAPI
 - **IDOR / BOLA (API1)** – Modificación de IDs numéricos, UUID y parámetros
@@ -247,7 +214,7 @@ python3 wstg-scan.py
 ```bash
 # Tras los pasos de la instalación rápida:
 sudo apt update
-sudo apt install -y nmap ffuf hydra whatweb seclists
+sudo apt install -y nmap ffuf hydra whatweb seclists wpscan
 
 # Nuclei: usa los binarios oficiales (más recientes que apt)
 GO111MODULE=on go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
@@ -256,7 +223,7 @@ sudo apt install -y nuclei
 nuclei -update-templates
 ```
 
-> El script ofrecerá instalar Nuclei, WhatWeb y SecLists automáticamente vía `apt` si no los encuentra.
+> El script ofrecerá instalar Nuclei, WhatWeb, SecLists y WPScan automáticamente vía `apt` si no los encuentra.
 
 ---
 
