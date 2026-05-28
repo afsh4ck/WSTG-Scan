@@ -1,7 +1,10 @@
 /.vscode/
 
-# Salida generada y artefactos locales
-/reports/
+# Salida generada y artefactos locales (se versiona solo el HTML de demo)
+/reports/*
+!/reports/example.com/
+/reports/example.com/*
+!/reports/example.com/example.com.html
 __pycache__/
 *.pyc
 venv/
