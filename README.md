@@ -480,3 +480,19 @@ Agradecimientos
 OWASP por la guía WSTG.
 
 Daniel Miessler por SecLists.
+
+---
+
+## Actualizaciones recientes
+
+- Nmap ejecuta un segundo escaneo dirigido con NSE (`default,vuln,safe`) sobre los puertos abiertos encontrados por `-sV`.
+- WhatWeb, ffuf, Nuclei, Hydra, WPScan y scripts NSE HTTP reutilizan cookies/cabeceras de la sesion autenticada cuando estan disponibles.
+- El reporte HTML se genera como dashboard profesional con tablas visuales y un bloque final de JSON completo para conservar todos los datos recopilados.
+- Nuevo modulo de Pentesting Active Directory con Kerbrute, LDAP, NXC/NetExec e Impacket:
+  - `kerbrute userenum` para enumeracion de usuarios.
+  - `ldapsearch` para usuarios, grupos y equipos.
+  - `nxc smb` para enumeracion y fuerza bruta/password spraying.
+  - `impacket-GetNPUsers dominio/ -usersfile valid-users.txt -dc-ip <DC>` para AS-REP Roasting.
+  - `impacket-GetUserSPNs dominio/usuario:password -dc-ip <DC> -request` para Kerberoasting.
+
+Herramientas Kali recomendadas para AD: `kerbrute`, `ldap-utils`, `netexec`/`nxc` e `impacket-scripts`.
