@@ -1830,13 +1830,29 @@ def _build_html_report(report_data):
         "spider": "share-network", "codigo": "code", "ad": "tree-structure",
         "credenciales": "key", "raw": "database",
     }
+    # Phosphor no incluye el logo de WordPress: se inyecta el SVG oficial.
+    WP_PATH = ("M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zM1.211 12c0-1.564.336-3.049.935-4.39"
+               "l5.151 14.114C3.694 19.962 1.211 16.271 1.211 12zm10.789 10.789c-1.06 0-2.082-.155-3.048-.439l3.237-9.406 "
+               "3.315 9.087c.022.053.048.101.078.149-1.12.393-2.325.609-3.582.609zm1.487-15.864c.65-.034 1.235-.103 1.235-.103"
+               ".582-.069.514-.922-.069-.888 0 0-1.749.137-2.877.137-1.061 0-2.844-.137-2.844-.137-.583-.034-.651.853-.069.888"
+               " 0 0 .551.069 1.132.103l1.681 4.604-2.361 7.078-3.926-11.682c.65-.034 1.235-.103 1.235-.103.582-.069.513-.922"
+               "-.069-.888 0 0-1.748.137-2.876.137-.202 0-.441-.005-.695-.013C4.911 3.193 8.235 1.211 12 1.211c2.804 0 5.357 "
+               "1.072 7.273 2.829-.046-.003-.092-.009-.139-.009-1.061 0-1.814.925-1.814 1.919 0 .893.515 1.648 1.061 2.541.41."
+               "723.889 1.648.889 2.986 0 .926-.355 2.001-.822 3.498l-1.078 3.599-3.906-11.621zm5.16 14.583l3.297-9.532c.615-1."
+               "538.82-2.769.82-3.862 0-.396-.026-.764-.073-1.106.838 1.531 1.316 3.288 1.316 5.156 0 3.965-2.15 7.426-5.348 "
+               "9.293z")
+
+    def sec_icon_html(sid, cls):
+        if sid == "wordpress":
+            return (f"<svg class='{cls}' viewBox='0 0 24 24' width='1em' height='1em' fill='currentColor' "
+                    f"aria-hidden='true'><path d='{WP_PATH}'/></svg>")
+        return f"<i class='ph ph-{SEC_ICON.get(sid, 'circle')} {cls}'></i>"
 
     def nav_link(idx, sid, title, count):
         cnt = "" if count in (None, 0) else f"<span class='ncount'>{esc(count)}</span>"
-        icon = SEC_ICON.get(sid, "circle")
         return (
             f"<a href='#{sid}' data-target='{sid}' title='{esc(title)}'>"
-            f"<i class='ph ph-{icon} nicon'></i>"
+            f"{sec_icon_html(sid, 'nicon')}"
             f"<span class='nidx'>{idx:02d}</span>"
             f"<span class='ntext'>{esc(title)}</span>{cnt}</a>"
         )
@@ -1847,10 +1863,9 @@ def _build_html_report(report_data):
 
     def section_block(sid, title, count, content):
         cnt = "" if count in (None,) else f"<span class='count'>{esc(count)}</span>"
-        icon = SEC_ICON.get(sid, "circle")
         return (
             f"<section id='{sid}' class='section'>"
-            f"<div class='section-head'><i class='ph ph-{icon} shic'></i><h2>{esc(title)}</h2>{cnt}"
+            f"<div class='section-head'>{sec_icon_html(sid, 'shic')}<h2>{esc(title)}</h2>{cnt}"
             f"<a class='toplink' href='#top' title='Volver arriba'><i class='ph ph-arrow-up'></i></a></div>"
             f"{content}</section>"
         )
@@ -1903,18 +1918,18 @@ def _build_html_report(report_data):
 :root{
   --bg:#f4f6fb; --surface:#ffffff; --surface-2:#eef1f6; --glass:rgba(255,255,255,.72); --text:#0f172a; --muted:#5b6675;
   --line:#dde3ec; --blue:#2563eb; --green:#0f9d6b; --amber:#b7791f; --orange:#d9772b; --red:#d33a34;
-  --ink:#0b1220; --accent:#0aa87f; --accent-2:#2563eb; --glow:rgba(10,168,127,.18); --shadow:rgba(15,23,42,.10);
+  --ink:#0b1220; --accent:#2563eb; --accent-2:#0ea5e9; --glow:rgba(37,99,235,.18); --shadow:rgba(15,23,42,.10);
   --c-crit:#d33a34; --c-high:#d9772b; --c-med:#caa11a; --c-low:#2563eb; --c-info:#8a93a3;
-  --grid-line:rgba(15,23,42,.035);
+  --grid-line:rgba(37,99,235,.045);
   --font-head:"Space Grotesk","Segoe UI",sans-serif;
   --sidew:266px;
 }
 [data-theme="dark"]{
   --bg:#070a10; --surface:#0f141d; --surface-2:#161d29; --glass:rgba(15,20,29,.66); --text:#d6dde7; --muted:#7e8a99;
   --line:#1e2735; --blue:#5b9dff; --green:#33d68f; --amber:#e7b85a; --orange:#ff9d57; --red:#ff6b6b;
-  --ink:#f4f7fb; --accent:#2ee6a6; --accent-2:#5b9dff; --glow:rgba(46,230,166,.22); --shadow:rgba(0,0,0,.45);
+  --ink:#f4f7fb; --accent:#4d9bff; --accent-2:#38bdf8; --glow:rgba(77,155,255,.24); --shadow:rgba(0,0,0,.45);
   --c-crit:#ff6b6b; --c-high:#ff9d57; --c-med:#ffd24a; --c-low:#5b9dff; --c-info:#7e8a99;
-  --grid-line:rgba(46,230,166,.045);
+  --grid-line:rgba(77,155,255,.05);
 }
 *{ box-sizing:border-box; }
 html{ scroll-behavior:smooth; }
@@ -1937,8 +1952,8 @@ code,pre{ font-family:"JetBrains Mono",Consolas,Menlo,Monaco,monospace; }
 .side{ position:sticky; top:0; height:100vh; padding:16px 12px; border-right:1px solid var(--line);
   background:var(--glass); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); overflow:auto; overflow-x:hidden; }
 .brand{ display:flex; align-items:center; gap:11px; padding:4px 6px 14px; margin-bottom:10px; border-bottom:1px solid var(--line); }
-.logo{ width:38px; height:38px; border-radius:11px; flex:0 0 auto; display:grid; place-items:center; position:relative;
-  background:linear-gradient(135deg,var(--accent),var(--accent-2)); color:#06281f; font-family:var(--font-head); font-weight:700; font-size:1.05rem;
+.logo{ width:40px; height:40px; border-radius:12px; flex:0 0 auto; display:grid; place-items:center; position:relative;
+  background:linear-gradient(135deg,var(--accent),var(--accent-2)); color:#ffffff; font-size:1.45rem;
   box-shadow:0 0 0 3px var(--glow),0 6px 18px var(--shadow); }
 .brand-txt{ overflow:hidden; }
 .brand-txt strong{ display:block; font-size:1rem; color:var(--ink); font-weight:700; white-space:nowrap; }
@@ -1954,6 +1969,7 @@ code,pre{ font-family:"JetBrains Mono",Consolas,Menlo,Monaco,monospace; }
 .side-nav a.active{ background:color-mix(in srgb,var(--accent) 12%,var(--surface)); color:var(--ink); border-left-color:var(--accent); }
 .side-nav a.active .nidx{ opacity:1; }
 .nicon{ font-size:1.15rem; color:var(--muted); flex:0 0 auto; width:20px; text-align:center; transition:color .15s; }
+svg.nicon{ display:inline-block; vertical-align:-2px; } svg.shic{ display:inline-block; vertical-align:-3px; }
 .side-nav a:hover .nicon,.side-nav a.active .nicon{ color:var(--accent); }
 .nidx{ font-family:"JetBrains Mono",monospace; font-size:.66rem; color:var(--muted); opacity:.6; flex:0 0 auto; width:16px; text-align:center; }
 .ntext{ flex:1; overflow:hidden; text-overflow:ellipsis; }
@@ -1971,8 +1987,9 @@ code,pre{ font-family:"JetBrains Mono",Consolas,Menlo,Monaco,monospace; }
 .topbar{ position:sticky; top:0; z-index:40; display:flex; align-items:center; gap:11px; flex-wrap:wrap;
   margin:-22px calc(-1*clamp(14px,3vw,36px)) 18px; padding:14px clamp(14px,3vw,36px);
   background:var(--glass); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); border-bottom:1px solid var(--line); }
-.menu-btn,.desk-collapse{ display:inline-flex; align-items:center; gap:6px; }
-.desk-collapse{ display:none; }
+.menu-fab{ display:none; position:fixed; top:12px; left:12px; z-index:70; width:46px; height:46px; place-items:center;
+  border:1px solid var(--line); background:var(--glass); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+  color:var(--text); border-radius:13px; cursor:pointer; font-size:1.4rem; box-shadow:0 6px 18px var(--shadow); }
 .search{ flex:1; min-width:200px; display:flex; align-items:center; gap:8px; background:var(--surface);
   border:1px solid var(--line); border-radius:11px; padding:9px 13px; transition:.15s; }
 .search:focus-within{ border-color:var(--accent); box-shadow:0 0 0 3px var(--glow); }
@@ -2065,9 +2082,8 @@ summary{ cursor:pointer; color:var(--ink); font-weight:600; }
   .layout,.layout.collapsed{ grid-template-columns:1fr; --sidew:266px; }
   .side{ position:fixed; z-index:60; width:280px; transform:translateX(-100%); transition:transform .22s; box-shadow:0 0 40px var(--shadow); }
   .side.open{ transform:translateX(0); }
-  .menu-btn{ display:inline-flex; } .desk-collapse{ display:none !important; }
+  .menu-fab{ display:grid; } .collapse-btn{ display:none; }
   .collapsed .brand-txt,.collapsed .ntext,.collapsed .ncount,.collapsed #themeLabel{ display:block; }
-  .collapsed .collapse-btn{ display:grid; }
   .main{ padding:16px; } .topbar{ margin:-16px -16px 16px; padding:12px 16px; }
   .grid.two{ grid-template-columns:1fr; }
   .hero{ grid-template-columns:1fr; } .hero h1{ font-size:1.95rem; }
@@ -2075,7 +2091,7 @@ summary{ cursor:pointer; color:var(--ink); font-weight:600; }
 }
 @media (prefers-reduced-motion:reduce){ *{ animation:none !important; transition:none !important; } }
 @media print{
-  @page{ margin:14mm 12mm; }
+  @page{ margin:12mm 10mm; }
   /* Forzar paleta clara en PDF: maxima legibilidad y ahorro de tinta */
   :root,[data-theme="dark"]{
     --bg:#ffffff; --surface:#ffffff; --surface-2:#f3f5f9; --glass:#ffffff; --text:#16202e; --muted:#54606e;
@@ -2083,10 +2099,10 @@ summary{ cursor:pointer; color:var(--ink); font-weight:600; }
     --c-crit:#c2271f; --c-high:#c25e15; --c-med:#9a7d0a; --c-low:#2358d8; --c-info:#6b7480;
   }
   *{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; box-shadow:none !important; }
-  .side,.topbar,.toplink,body::before,.collapse-btn{ display:none !important; }
+  .side,.topbar,.toplink,body::before,.collapse-btn,.menu-fab{ display:none !important; }
   html,body{ background:#fff !important; background-image:none !important; color:var(--text) !important; }
   .layout,.layout.collapsed{ display:block !important; grid-template-columns:1fr !important; }
-  .main{ padding:0 !important; max-width:none !important; }
+  .main{ padding:0 14mm !important; max-width:none !important; }
   .hero{ margin-top:4px; }
   /* Evitar cortes feos entre paginas */
   .panel,.metric,details,.table-wrap,.riskcard,.donut,.kpis,img{ break-inside:avoid; page-break-inside:avoid; }
@@ -2104,15 +2120,16 @@ summary{ cursor:pointer; color:var(--ink); font-weight:600; }
 </head>
 <body>
 <span id="top"></span>
+<button class="menu-fab" id="menuBtn" type="button" aria-label="Abrir menu"><i class="ph ph-list"></i></button>
 <div class="layout" id="layout">
   <aside class="side" id="sidebar">
     <div class="brand">
-      <div class="logo"><i class="ph-fill ph-shield-check"></i></div>
+      <div class="logo"><i class="ph-fill ph-shield-checkered"></i></div>
       <div class="brand-txt">
         <strong>WSTG&nbsp;Scanner</strong>
         <span>Security Report</span>
       </div>
-      <button class="collapse-btn desk-collapse" id="collapseBtn" type="button" title="Colapsar menu" aria-label="Colapsar menu">
+      <button class="collapse-btn" id="collapseBtn" type="button" title="Colapsar menu" aria-label="Colapsar menu">
         <i id="collapseIcon" class="ph ph-caret-left"></i>
       </button>
     </div>
@@ -2121,8 +2138,6 @@ summary{ cursor:pointer; color:var(--ink); font-weight:600; }
   </aside>
   <main class="main">
     <div class="topbar">
-      <button class="btn menu-btn" id="menuBtn" type="button"><i class="ph ph-list"></i> <span>Menu</span></button>
-      <button class="btn desk-collapse" id="collapseBtn2" type="button" title="Colapsar barra lateral"><i class="ph ph-sidebar-simple"></i></button>
       <label class="search"><i class="ph ph-magnifying-glass muted"></i><input id="q" type="search" placeholder="Filtrar tablas (host, puerto, CVE, hash...)"></label>
       <button class="btn" onclick="window.print()" type="button"><i class="ph ph-file-pdf"></i> <span>Exportar PDF</span></button>
     </div>
@@ -2161,8 +2176,8 @@ summary{ cursor:pointer; color:var(--ink); font-weight:600; }
     var ic=document.getElementById("collapseIcon"); if(ic) ic.style.transform=c?"rotate(180deg)":"none"; }
   setCollapse(localStorage.getItem(ck)==="1");
   function toggleCollapse(){ var c=!layout.classList.contains("collapsed"); setCollapse(c); localStorage.setItem(ck,c?"1":"0"); }
-  ["collapseBtn","collapseBtn2"].forEach(function(id){ var b=document.getElementById(id);
-    if(b) b.addEventListener("click",function(){ if(window.innerWidth<=980){ sb.classList.toggle("open"); } else { toggleCollapse(); } }); });
+  var cb=document.getElementById("collapseBtn");
+  if(cb) cb.addEventListener("click",function(){ if(window.innerWidth<=980){ sb.classList.remove("open"); } else { toggleCollapse(); } });
   // Scrollspy
   var links=[].slice.call(document.querySelectorAll(".side-nav a"));
   var map={}; links.forEach(function(a){ map[a.getAttribute("data-target")]=a; });
