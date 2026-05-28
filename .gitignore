@@ -1,1 +1,9 @@
 /.vscode/
+
+# Salida generada y artefactos locales
+/reports/
+__pycache__/
+*.pyc
+venv/
+.venv/
+_gen_sample_report.py

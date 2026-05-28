@@ -1376,485 +1376,6 @@ def _html_escape(value):
     return html.escape(str(value), quote=True)
 
 def _build_html_report(report_data):
-    """Genera reporte HTML con modo light/dark y secciones relevantes del escaneo."""
-    scan_data = report_data.get("scan_data", {})
-    findings = report_data.get("findings", [])
-    technologies = scan_data.get("general", {}).get("technologies", []) or []
-    users = scan_data.get("users", [])
-    emails = scan_data.get("emails", [])
-    endpoints = scan_data.get("api_endpoints", [])
-    vhosts_list = scan_data.get("vhosts", [])
-    nmap_data = scan_data.get("nmap", {}) or {}
-    nmap_ports = nmap_data.get("ports", []) or []
-    dirs = scan_data.get("directory_hits", [])
-    creds = scan_data.get("bruteforce_credentials", [])
-    wordpress = scan_data.get("wordpress", {}) or {}
-    spider = scan_data.get("spider", {})
-    src_code = scan_data.get("source_code_analysis", {}) or {}
-    src_findings = src_code.get("findings") or []
-    meta = scan_data.get("stats", {})
-
-    nuclei_summary = scan_data.get('nuclei_summary', {})
-    nuclei_findings_list = scan_data.get('nuclei_findings', []) or []
-    nuclei_html = ""
-    if nuclei_summary or nuclei_findings_list:
-        sev_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4, 'unknown': 5}
-        nuclei_html = "<div class='card' id='nuclei'><h3>Análisis Nuclei</h3>"
-        if nuclei_summary:
-            nuclei_html += "<h4>Resumen por severidad</h4><ul>"
-            for sev in sorted(nuclei_summary.keys(), key=lambda s: sev_order.get(s, 99)):
-                tids = nuclei_summary[sev]
-                nuclei_html += (
-                    f"<li><b>{_html_escape(sev.upper())}</b>: {len(tids)} hallazgos "
-                    f"({', '.join(_html_escape(t) for t in tids)})</li>"
-                )
-            nuclei_html += "</ul>"
-        if nuclei_findings_list:
-            sorted_findings = sorted(
-                nuclei_findings_list,
-                key=lambda x: (sev_order.get((x.get('severity') or 'unknown'), 99),
-                               x.get('template_id', ''))
-            )
-            nuclei_html += (
-                "<h4>Detalle de hallazgos</h4>"
-                "<table><thead><tr><th>Severidad</th><th>Template</th>"
-                "<th>Nombre</th><th>URL afectada</th></tr></thead><tbody>"
-            )
-            for n in sorted_findings:
-                nuclei_html += (
-                    "<tr>"
-                    f"<td>{_html_escape((n.get('severity') or '').upper())}</td>"
-                    f"<td>{_html_escape(n.get('template_id', ''))}</td>"
-                    f"<td>{_html_escape(n.get('name', ''))}</td>"
-                    f"<td>{_html_escape(n.get('url', ''))}</td>"
-                    "</tr>"
-                )
-            nuclei_html += "</tbody></table>"
-        nuclei_html += "</div>"
-
-    # ── Hallazgos agrupados por categoría ───────────────────────────────
-    def _classify(item):
-        s = str(item)
-        if s.startswith('[NUCLEI:'):
-            try:
-                sev = s.split('[NUCLEI:', 1)[1].split(']', 1)[0].strip()
-            except Exception:
-                sev = 'INFO'
-            return f"Nuclei — {sev}"
-        if s.startswith('[VULN]'):
-            return "Vulnerabilidades"
-        if s.startswith('[DIR]'):
-            return "Directorios / Endpoints"
-        if s.startswith('[VHOST]'):
-            return "Subdominios (vhosts)"
-        if s.startswith('[PORT]'):
-            return "Puertos abiertos (Nmap)"
-        if s.startswith('[WP'):
-            return "WordPress"
-        if s.startswith('[CRED'):
-            return "Credenciales"
-        return "Otros"
-
-    CAT_ORDER = [
-        "Vulnerabilidades",
-        "Nuclei — CRITICAL", "Nuclei — HIGH", "Nuclei — MEDIUM",
-        "Nuclei — LOW", "Nuclei — INFO", "Nuclei — UNKNOWN",
-        "Puertos abiertos (Nmap)",
-        "WordPress",
-        "Credenciales",
-        "Subdominios (vhosts)",
-        "Directorios / Endpoints",
-        "Otros",
-    ]
-    grouped = {}
-    for item in findings:
-        grouped.setdefault(_classify(item), []).append(str(item))
-    if grouped:
-        sections = []
-        cats_present = [c for c in CAT_ORDER if c in grouped] + \
-                       [c for c in grouped if c not in CAT_ORDER]
-        for cat in cats_present:
-            items = grouped[cat]
-            section = (
-                f"<details open><summary><b>{_html_escape(cat)}</b> "
-                f"<span class='muted'>({len(items)})</span></summary><ul>"
-                + "\n".join(f"<li>{_html_escape(i)}</li>" for i in items)
-                + "</ul></details>"
-            )
-            sections.append(section)
-        findings_items = "\n".join(sections)
-    else:
-        findings_items = "<span class='muted'>Sin hallazgos.</span>"
-
-    # ── Tecnologías como chips agrupados (más legibles) ────────────────
-    if technologies:
-        if isinstance(technologies[0], dict):
-            chips = []
-            for t in technologies:
-                name = _html_escape(str(t.get('name', '')).strip())
-                detail = _html_escape(str(t.get('detail', '')).strip())
-                if not name:
-                    continue
-                if detail:
-                    chips.append(
-                        f"<span class='tech-chip'><b>{name}</b>"
-                        f"<span class='tech-detail'>{detail}</span></span>"
-                    )
-                else:
-                    chips.append(f"<span class='tech-chip'><b>{name}</b></span>")
-            technologies_html = "<div class='tech-grid'>" + "".join(chips) + "</div>"
-        else:
-            technologies_html = "<div class='tech-grid'>" + "".join(
-                f"<span class='tech-chip'><b>{_html_escape(str(t))}</b></span>"
-                for t in technologies
-            ) + "</div>"
-    else:
-        technologies_html = "<span class='muted'>No detectadas</span>"
-    users_html = "<ul class='user-list'>" + "\n".join(
-        f"<li><span class='tag'>{_html_escape(u)}</span></li>" for u in users
-    ) + "</ul>" if users else "<span class='muted'>Sin usuarios</span>"
-    emails_html = "<ul class='email-list'>" + "\n".join(
-        f"<li><span class='tag'>{_html_escape(e)}</span></li>" for e in emails
-    ) + "</ul>" if emails else "<span class='muted'>Sin emails</span>"
-
-    endpoint_rows = "\n".join(
-        "<tr>"
-        f"<td>{_html_escape(ep.get('status', ''))}</td>"
-        f"<td>{_html_escape(ep.get('endpoint', ''))}</td>"
-        f"<td>{_html_escape(ep.get('url', ''))}</td>"
-        f"<td>{_html_escape(ep.get('content_type', ''))}</td>"
-        "</tr>"
-        for ep in endpoints
-    ) or "<tr><td colspan='4'>Sin endpoints detectados.</td></tr>"
-
-    vhost_rows = "\n".join(
-        "<tr>"
-        f"<td>{_html_escape(v.get('status', ''))}</td>"
-        f"<td>{_html_escape(v.get('fqdn') or v.get('subdomain', ''))}</td>"
-        f"<td>{_html_escape(v.get('size', ''))}</td>"
-        "</tr>"
-        for v in vhosts_list if isinstance(v, dict)
-    ) or "<tr><td colspan='3'>Sin subdominios detectados.</td></tr>"
-
-    def _nmap_version(p):
-        parts = [p.get('product', ''), p.get('version', ''), p.get('extrainfo', '')]
-        return ' '.join(x for x in parts if x).strip()
-
-    nmap_rows = "\n".join(
-        "<tr>"
-        f"<td>{_html_escape(p.get('port', ''))}/{_html_escape(p.get('protocol', ''))}</td>"
-        f"<td>{_html_escape(p.get('state', ''))}</td>"
-        f"<td>{_html_escape(p.get('service', ''))}</td>"
-        f"<td>{_html_escape(_nmap_version(p))}</td>"
-        "</tr>"
-        for p in nmap_ports if isinstance(p, dict)
-    ) or "<tr><td colspan='4'>Sin puertos detectados.</td></tr>"
-
-    dir_rows = ""
-    if dirs:
-        for hit in dirs:
-            if isinstance(hit, dict):
-                dir_rows += (
-                    "<tr>"
-                    f"<td>{_html_escape(hit.get('status', ''))}</td>"
-                    f"<td>{_html_escape(hit.get('url', ''))}</td>"
-                    f"<td>{_html_escape(hit.get('size', ''))}</td>"
-                    "</tr>"
-                )
-            else:
-                dir_rows += (
-                    "<tr>"
-                    f"<td></td>"
-                    f"<td>{_html_escape(str(hit))}</td>"
-                    f"<td></td>"
-                    "</tr>"
-                )
-    if not dir_rows:
-        dir_rows = "<tr><td colspan='3'>Sin directorios encontrados.</td></tr>"
-
-    creds_rows = "\n".join(
-        "<tr>"
-        f"<td>{_html_escape(c.get('username', ''))}</td>"
-        f"<td>{_html_escape(c.get('password', ''))}</td>"
-        "</tr>"
-        for c in creds
-    ) or "<tr><td colspan='2'>Sin credenciales válidas detectadas.</td></tr>"
-
-    sample_urls_html = "\n".join(
-        f"<li>{_html_escape(u)}</li>" for u in spider.get("sample_urls", [])
-    ) or "<li>Sin URLs capturadas.</li>"
-
-    # ── Análisis de código fuente ───────────────────────────────────────
-    src_sev_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
-    src_html = ""
-    if src_code:
-        sev_stats = src_code.get("summary") or {}
-        sorted_src = sorted(
-            src_findings,
-            key=lambda x: src_sev_order.get((x.get("severity") or "low").lower(), 9),
-        )
-        src_kpi = (
-            "<div class='kpi'>"
-            f"<div><span class='muted'>Páginas</span><b>{src_code.get('pages_analyzed', 0)}</b></div>"
-            f"<div><span class='muted'>Recursos JS/JSON</span><b>{src_code.get('assets_analyzed', 0)}</b></div>"
-            f"<div><span class='muted'>Total</span><b>{len(src_findings)}</b></div>"
-            f"<div><span class='muted'>Critical</span><b>{sev_stats.get('critical', 0)}</b></div>"
-            f"<div><span class='muted'>High</span><b>{sev_stats.get('high', 0)}</b></div>"
-            f"<div><span class='muted'>Medium</span><b>{sev_stats.get('medium', 0)}</b></div>"
-            f"<div><span class='muted'>Low</span><b>{sev_stats.get('low', 0)}</b></div>"
-            "</div>"
-        )
-        if sorted_src:
-            src_rows = "\n".join(
-                "<tr>"
-                f"<td>{_html_escape((f.get('severity') or '').upper())}</td>"
-                f"<td>{_html_escape(f.get('type', ''))}</td>"
-                f"<td><code>{_html_escape(f.get('value', ''))}</code></td>"
-                f"<td>{_html_escape(f.get('url', ''))}</td>"
-                f"<td><code>{_html_escape(f.get('snippet', ''))}</code></td>"
-                "</tr>"
-                for f in sorted_src
-            )
-        else:
-            src_rows = "<tr><td colspan='5'>Sin hallazgos en el código fuente.</td></tr>"
-        src_html = (
-            "<div class='card' id='codigo'>"
-            "<h3>Análisis de código fuente</h3>"
-            f"{src_kpi}"
-            "<table><thead><tr>"
-            "<th>Severidad</th><th>Tipo</th><th>Valor detectado</th><th>URL</th><th>Contexto</th>"
-            "</tr></thead><tbody>"
-            f"{src_rows}"
-            "</tbody></table>"
-            "</div>"
-        )
-
-    # WordPress / WPScan
-    wordpress_html = ""
-    if wordpress:
-        wp_version = wordpress.get("version") or {}
-        wp_theme = wordpress.get("main_theme") or {}
-        wp_users = wordpress.get("users") or []
-        wp_plugins = wordpress.get("plugins") or []
-        wp_vulns = wordpress.get("vulnerabilities") or []
-        wp_creds = wordpress.get("credentials") or []
-        wp_user_rows = "\n".join(
-            "<tr>"
-            f"<td>{_html_escape(u.get('username', ''))}</td>"
-            f"<td>{_html_escape(u.get('name', '') or '')}</td>"
-            f"<td>{_html_escape(u.get('found_by', '') or '')}</td>"
-            "</tr>"
-            for u in wp_users if isinstance(u, dict)
-        ) or "<tr><td colspan='3'>Sin usuarios WordPress detectados.</td></tr>"
-        wp_vuln_rows = "\n".join(
-            "<tr>"
-            f"<td>{_html_escape(v.get('component_type', ''))}</td>"
-            f"<td>{_html_escape(v.get('component', ''))}</td>"
-            f"<td>{_html_escape(v.get('title', ''))}</td>"
-            f"<td>{_html_escape(v.get('fixed_in', ''))}</td>"
-            "</tr>"
-            for v in wp_vulns if isinstance(v, dict)
-        ) or "<tr><td colspan='4'>Sin vulnerabilidades WordPress reportadas.</td></tr>"
-        wordpress_html = (
-            "<div class='card' id='wordpress'>"
-            "<h3>WordPress / WPScan</h3>"
-            "<div class='kpi'>"
-            f"<div><span class='muted'>Detectado</span><b>{'Si' if wordpress.get('detected') else 'No'}</b></div>"
-            f"<div><span class='muted'>Version</span><b>{_html_escape(wp_version.get('number') or '-')}</b></div>"
-            f"<div><span class='muted'>Plugins</span><b>{len(wp_plugins)}</b></div>"
-            f"<div><span class='muted'>Usuarios</span><b>{len(wp_users)}</b></div>"
-            f"<div><span class='muted'>Vulns</span><b>{len(wp_vulns)}</b></div>"
-            f"<div><span class='muted'>Credenciales</span><b>{len(wp_creds)}</b></div>"
-            "</div>"
-            f"<p><b>Tema principal:</b> {_html_escape(wp_theme.get('name') or '-')}</p>"
-            "<h4>Usuarios</h4>"
-            "<table><thead><tr><th>Usuario</th><th>Nombre</th><th>Encontrado por</th></tr></thead><tbody>"
-            f"{wp_user_rows}"
-            "</tbody></table>"
-            "<h4>Vulnerabilidades</h4>"
-            "<table><thead><tr><th>Tipo</th><th>Componente</th><th>Titulo</th><th>Fixed in</th></tr></thead><tbody>"
-            f"{wp_vuln_rows}"
-            "</tbody></table>"
-            "</div>"
-        )
-
-    # Navegación por secciones
-    nav_sections = [
-        ("Resumen", "resumen"),
-        ("Información general", "info"),
-        ("Puertos (Nmap)", "nmap"),
-        ("Hallazgos", "hallazgos"),
-        ("API", "api"),
-        ("Subdominios", "vhosts"),
-        ("Directorios", "directorios"),
-        ("WordPress", "wordpress"),
-        ("Credenciales", "credenciales"),
-        ("Spidering", "spidering"),
-        ("Código fuente", "codigo"),
-    ]
-    nav_html = "<nav class='nav-pills'>" + "\n".join(
-        f"<a href='#{sec_id}' class='pill'>{sec_name}</a>" for sec_name, sec_id in nav_sections
-    ) + "</nav>"
-
-    return f"""<!doctype html>
-<html lang=\"es\">
-<head>
-    <meta charset=\"utf-8\">
-    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
-    <title>WSTG Report - {_html_escape(report_data.get('target', ''))}</title>
-    <style>
-        :root {{
-            --bg:#f5f7fb; --panel:#ffffff; --text:#0b1320; --muted:#5c687a; --border:#d8deea;
-            --accent:#0b7fab; --tag:#e9f5fb; --code:#eef1f7;
-        }}
-        [data-theme=\"dark\"] {{
-            --bg:#0e1622; --panel:#141f2f; --text:#dce7ff; --muted:#9fb0ce; --border:#26344c;
-            --accent:#5bc0eb; --tag:#1d3147; --code:#1a283b;
-        }}
-        * {{ box-sizing: border-box; }}
-        body {{ margin:0; font-family:\"Segoe UI\",\"Noto Sans\",sans-serif; background:var(--bg); color:var(--text); }}
-        .wrap {{ max-width: 1180px; margin: 24px auto; padding: 0 14px 40px; }}
-        .card {{ background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:14px; margin-bottom:12px; overflow:auto; }}
-        .top {{ display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }}
-        .btn {{ border:none; background:var(--panel); color:var(--text); border-radius:50%; padding:10px; cursor:pointer; font-size:1.5rem; box-shadow:0 2px 8px #0001; transition:background 0.2s; }}
-        .btn:hover {{ background:var(--tag); }}
-        .nav-pills {{ display:flex; flex-wrap:wrap; gap:8px; margin:18px 0 10px 0; }}
-        .pill {{ display:inline-block; padding:7px 18px; border-radius:999px; background:var(--tag); color:var(--accent); text-decoration:none; font-weight:500; border:1px solid var(--border); transition:background 0.2s, color 0.2s; }}
-        .pill:hover, .pill:focus {{ background:var(--accent); color:#fff; }}
-        .kpi {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:10px; }}
-        .kpi div {{ background:var(--code); border:1px solid var(--border); border-radius:10px; padding:8px; }}
-        .kpi b {{ display:block; color:var(--accent); font-size:1.25rem; }}
-        .tag {{ display:inline-block; margin:4px 6px 0 0; background:var(--tag); padding:4px 8px; border-radius:999px; font-size:.85rem; }}
-        .muted {{ color:var(--muted); }}
-        table {{ width:100%; border-collapse:collapse; }}
-        th, td {{ text-align:left; border-bottom:1px solid var(--border); padding:8px 6px; vertical-align:top; }}
-        th {{ color:var(--accent); }}
-        pre {{ background:var(--code); border:1px solid var(--border); border-radius:10px; padding:10px; overflow:auto; }}
-        .tech-list, .user-list, .email-list {{ list-style:none; padding:0; margin:0; display:flex; flex-wrap:wrap; gap:0; }}
-        .tech-list li, .user-list li, .email-list li {{ margin:0 8px 4px 0; }}
-        .tech-grid {{ display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }}
-        .tech-chip {{ display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:999px; background:var(--tag); border:1px solid var(--border); font-size:.9rem; }}
-        .tech-chip b {{ color:var(--accent); font-weight:600; }}
-        .tech-detail {{ background:var(--code); padding:2px 8px; border-radius:999px; font-size:.8rem; color:var(--muted); font-family:Consolas,monospace; }}
-        details {{ margin-bottom:10px; }}
-        details summary {{ cursor:pointer; padding:6px 0; font-size:1rem; user-select:none; }}
-        details summary:hover {{ color:var(--accent); }}
-        details ul {{ margin:6px 0 6px 18px; }}
-        .target-card {{ display:flex; align-items:center; gap:18px; }}
-        .target-icon {{ font-size:2.2rem; color:var(--accent); margin-right:8px; }}
-        .target-meta {{ font-size:1.1rem; color:var(--muted); }}
-    </style>
-</head>
-<body>
-    <div class="wrap">
-        <h1 style='font-size:2.4rem; color:var(--accent); margin-bottom:10px; text-align:center;'>OWASP WSTG Security Scanner</h1>
-        <h2 style='font-size:1.7rem; color:var(--muted); margin-bottom:18px; text-align:center;'>WstgScan</h2>
-        <div class="card top">
-            <div class='target-card'>
-                <span class='target-icon'>🌐</span>
-                <div>
-                    <div style='font-size:1.35rem; font-weight:600; color:var(--accent);'>{_html_escape(report_data.get('target', ''))}</div>
-                    <div class='target-meta'>Fecha: {_html_escape(report_data.get('date', ''))}</div>
-                </div>
-            </div>
-            <button id="themeBtn" class="btn" title='Cambiar tema'><span id='themeIcon'>🌙</span></button>
-        </div>
-
-        {nav_html}
-
-        <div class="card" id='resumen'>
-            <h3>Resumen</h3>
-            <div class="kpi">
-                <div><span class="muted">Hallazgos</span><b>{len(findings)}</b></div>
-                <div><span class="muted">Tecnologías</span><b>{len(technologies)}</b></div>
-                <div><span class="muted">API</span><b>{len(endpoints)}</b></div>
-                <div><span class="muted">VHosts</span><b>{len(vhosts_list)}</b></div>
-                <div><span class="muted">Puertos</span><b>{len(nmap_ports)}</b></div>
-                <div><span class="muted">Directorios</span><b>{len(dirs)}</b></div>
-                <div><span class="muted">Usuarios</span><b>{len(users)}</b></div>
-                <div><span class="muted">Credenciales</span><b>{len(creds)}</b></div>
-                <div><span class="muted">WordPress vulns</span><b>{len(wordpress.get('vulnerabilities') or [])}</b></div>
-                <div><span class="muted">Código fuente</span><b>{len(src_findings)}</b></div>
-            </div>
-            <pre>{_html_escape(json.dumps(meta, indent=2, ensure_ascii=False))}</pre>
-        </div>
-
-        <div class="card" id='info'>
-            <h3>Información general</h3>
-            <p><b>Servidor:</b> {_html_escape(scan_data.get('general', {}).get('server', 'N/A'))}</p>
-            <p><b>Status:</b> {_html_escape(scan_data.get('general', {}).get('status_code', 'N/A'))}</p>
-            <p><b>Tecnologías:</b><br>{technologies_html}</p>
-            <p><b>Usuarios:</b><br>{users_html}</p>
-            <p><b>Emails:</b><br>{emails_html}</p>
-        </div>
-
-        <div class="card" id='nmap'>
-            <h3>Escaneo de puertos (Nmap)</h3>
-            <p class='muted'>Comando: <code>{_html_escape(nmap_data.get('command', 'nmap -sV'))}</code> · Host: <code>{_html_escape(nmap_data.get('host', '-'))}</code></p>
-            <table><thead><tr><th>Puerto</th><th>Estado</th><th>Servicio</th><th>Versión</th></tr></thead><tbody>{nmap_rows}</tbody></table>
-        </div>
-
-        <div class="card" id='hallazgos'><h3>Hallazgos</h3>{findings_items}</div>
-        {nuclei_html}
-
-        <div class="card" id='api'>
-            <h3>Endpoints API detectados</h3>
-            <table><thead><tr><th>Status</th><th>Endpoint</th><th>URL</th><th>Content-Type</th></tr></thead><tbody>{endpoint_rows}</tbody></table>
-        </div>
-
-        <div class=\"card\" id='vhosts'>
-            <h3>Subdominios (vhosts) descubiertos</h3>
-            <table><thead><tr><th>Status</th><th>VHost</th><th>Tamaño</th></tr></thead><tbody>{vhost_rows}</tbody></table>
-        </div>
-
-        <div class=\"card\" id='directorios'>
-            <h3>Directorios/archivos descubiertos</h3>
-            <table><thead><tr><th>Status</th><th>URL</th><th>Tamaño</th></tr></thead><tbody>{dir_rows}</tbody></table>
-        </div>
-
-        {wordpress_html}
-
-        <div class=\"card\" id='credenciales'>
-            <h3>Credenciales válidas (bruteforce)</h3>
-            <table><thead><tr><th>Usuario</th><th>Contraseña</th></tr></thead><tbody>{creds_rows}</tbody></table>
-        </div>
-
-        <div class=\"card\" id='spidering'>
-            <h3>Spidering (muestra de URLs)</h3>
-            <ul>{sample_urls_html}</ul>
-        </div>
-
-        {src_html}
-    </div>
-
-    <script>
-        (function() {{
-            var root = document.documentElement;
-            var key = 'wstg_theme';
-            var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-            var initial = localStorage.getItem(key) || (prefersDark ? 'dark' : 'light');
-            root.setAttribute('data-theme', initial);
-            var themeBtn = document.getElementById('themeBtn');
-            var themeIcon = document.getElementById('themeIcon');
-            function updateIcon() {{
-                var curr = root.getAttribute('data-theme') || 'light';
-                themeIcon.textContent = curr === 'dark' ? '☀️' : '🌙';
-            }}
-            updateIcon();
-            themeBtn.addEventListener('click', function() {{
-                var curr = root.getAttribute('data-theme') || 'light';
-                var next = curr === 'dark' ? 'light' : 'dark';
-                root.setAttribute('data-theme', next);
-                localStorage.setItem(key, next);
-                updateIcon();
-            }});
-        }})();
-    </script>
-</body>
-</html>
-"""
-
-def _build_html_report(report_data):
     """Genera un reporte HTML tipo dashboard SaaS con todos los datos recopilados."""
     scan_data = report_data.get("scan_data", {}) or {}
     findings = report_data.get("findings", []) or []
@@ -1878,6 +1399,9 @@ def _build_html_report(report_data):
     src_findings = src_code.get("findings", []) or []
     active_directory = scan_data.get("active_directory", {}) or {}
     stats = scan_data.get("stats", {}) or {}
+    robots_paths = scan_data.get("robots_paths", []) or []
+    http_methods = scan_data.get("http_methods", []) or []
+    injection = scan_data.get("injection", {}) or {}
 
     def esc(value):
         return _html_escape(value if value is not None else "")
@@ -1947,23 +1471,44 @@ def _build_html_report(report_data):
     kerberoast_hashes = (ad_imp.get("kerberoast") or {}).get("hashes", []) or []
     ad_creds = ((ad_nxc.get("bruteforce") or {}).get("credentials", []) or [])
 
+    # Conteo de severidad combinado (Nuclei + codigo fuente) para el resumen visual
+    sev_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    for n in nuclei_findings:
+        s = (n.get("severity") or "info").lower()
+        sev_counts[s] = sev_counts.get(s, 0) + 1
+    for f in src_findings:
+        s = (f.get("severity") or "low").lower()
+        sev_counts[s] = sev_counts.get(s, 0) + 1
+    sev_total = sum(sev_counts.values())
+    risk_score = sev_counts["critical"] * 10 + sev_counts["high"] * 5 + sev_counts["medium"] * 2 + sev_counts["low"]
+    if sev_counts["critical"]:
+        risk_label, risk_tone = "CRITICO", "bad"
+    elif sev_counts["high"]:
+        risk_label, risk_tone = "ALTO", "bad"
+    elif sev_counts["medium"]:
+        risk_label, risk_tone = "MEDIO", "warn"
+    elif sev_counts["low"] or sev_total:
+        risk_label, risk_tone = "BAJO", "info"
+    else:
+        risk_label, risk_tone = "LIMPIO", "good"
+
     kpis = [
-        ("Hallazgos", len(findings), "bad" if findings else "neutral"),
-        ("Puertos", len(nmap_ports), "info"),
-        ("NSE", len(nmap_nse), "warn" if nmap_nse else "neutral"),
-        ("Nuclei", len(nuclei_findings), "bad" if nuclei_findings else "neutral"),
-        ("Tecnologias", len(technologies), "good" if technologies else "neutral"),
-        ("Endpoints API", len(api_endpoints), "info"),
-        ("Directorios", len(directories), "info"),
-        ("Usuarios", len(users), "neutral"),
-        ("Credenciales", len(creds), "bad" if creds else "neutral"),
-        ("AD usuarios", len(ad_ldap.get("users") or []), "info"),
-        ("AS-REP", len(asrep_hashes), "bad" if asrep_hashes else "neutral"),
-        ("Kerberoast", len(kerberoast_hashes), "bad" if kerberoast_hashes else "neutral"),
+        ("Hallazgos", len(findings), "bad" if findings else "neutral", "warning-octagon", "hallazgos"),
+        ("Puertos", len(nmap_ports), "info", "network", "nmap"),
+        ("NSE", len(nmap_nse), "warn" if nmap_nse else "neutral", "scan", "nmap"),
+        ("Nuclei", len(nuclei_findings), "bad" if nuclei_findings else "neutral", "bug-beetle", "nuclei"),
+        ("Tecnologias", len(technologies), "good" if technologies else "neutral", "stack", "info"),
+        ("Endpoints API", len(api_endpoints), "info", "brackets-curly", "api"),
+        ("Directorios", len(directories), "info", "folders", "directorios"),
+        ("Usuarios", len(users), "neutral", "users-three", "info"),
+        ("Credenciales", len(creds), "bad" if creds else "neutral", "key", "credenciales"),
+        ("AD usuarios", len(ad_ldap.get("users") or []), "info", "tree-structure", "ad"),
+        ("AS-REP", len(asrep_hashes), "bad" if asrep_hashes else "neutral", "fingerprint", "ad"),
+        ("Kerberoast", len(kerberoast_hashes), "bad" if kerberoast_hashes else "neutral", "fire", "ad"),
     ]
     kpi_html = "<div class='kpis'>" + "".join(
-        f"<div class='metric metric-{tone}'><span>{esc(label)}</span><strong>{esc(value)}</strong></div>"
-        for label, value, tone in kpis
+        f"<a class='metric metric-{tone}' href='#{target}'><span><i class='ph ph-{icon}'></i>{esc(label)}</span><strong>{esc(value)}</strong></a>"
+        for label, value, tone, icon, target in kpis if value
     ) + "</div>"
 
     tech_rows = []
@@ -2006,14 +1551,32 @@ def _build_html_report(report_data):
         + "</div></div>"
     )
 
+    def _norm_ident(s):
+        return re.sub(r"[^a-z0-9]", "", str(s).lower())
+
+    def users_emails_block(users, emails):
+        # Correlaciona email <-> usuario por la parte local del correo
+        pairs, matched_u, matched_e = [], set(), set()
+        for u in users:
+            un = _norm_ident(u)
+            for e in emails:
+                local = _norm_ident(str(e).split("@", 1)[0])
+                if un and local and (un == local or (len(un) >= 3 and (un in local or local in un))):
+                    pairs.append((u, e)); matched_u.add(u); matched_e.add(e)
+        if pairs:
+            rows = [[f"<code>{esc(u)}</code>", f"<code>{esc(e)}</code>"] for u, e in pairs]
+            rows += [[f"<code>{esc(u)}</code>", "<span class='muted'>-</span>"] for u in users if u not in matched_u]
+            rows += [["<span class='muted'>-</span>", f"<code>{esc(e)}</code>"] for e in emails if e not in matched_e]
+            return "<h4>Correlacion usuario &harr; email</h4>" + table(["Usuario", "Email"], rows, raw_cols={0, 1})
+        return "<h4>Usuarios</h4>" + compact_list(users) + "<h4>Emails</h4>" + compact_list(emails)
+
     info_content = (
         "<div class='grid two'>"
         + "<div class='panel'><h3>WhatWeb / Tecnologias</h3>"
         + table(["Tecnologia", "Detalle", "Fuente"], tech_rows, "No se detectaron tecnologias.")
         + "</div>"
         + "<div class='panel'><h3>Usuarios y emails</h3>"
-        + "<h4>Usuarios</h4>" + compact_list(users)
-        + "<h4>Emails</h4>" + compact_list(emails)
+        + users_emails_block(users, emails)
         + "</div></div>"
         + "<div class='panel'><h3>Cabeceras HTTP</h3>"
         + table(["Header", "Valor"], header_rows, "Sin cabeceras registradas.")
@@ -2193,6 +1756,28 @@ def _build_html_report(report_data):
         "Sin credenciales web validas.",
     ) + "</div>"
 
+    # Superficie de exposicion: robots.txt, metodos HTTP, pruebas de inyeccion
+    inj_get = injection.get("tested_get_params") or []
+    inj_forms = injection.get("tested_form_inputs") or []
+    inj_form_rows = [[
+        fi.get("form_action", "-") if isinstance(fi, dict) else "-",
+        fi.get("input", fi) if isinstance(fi, dict) else fi,
+        fi.get("method", "-") if isinstance(fi, dict) else "-",
+    ] for fi in inj_forms]
+    exposure_content = (
+        "<div class='grid two'>"
+        + "<div class='panel'><h3>Rutas en robots.txt</h3>"
+        + table(["Ruta"], [[p] for p in robots_paths], "Sin rutas en robots.txt.")
+        + "</div><div class='panel'><h3>Metodos HTTP permitidos</h3>"
+        + (compact_list(sorted(http_methods)) if http_methods else "<span class='muted'>Sin metodos detectados (OPTIONS).</span>")
+        + "</div></div>"
+        + "<div class='panel'><h3>Pruebas de inyeccion</h3>"
+        + "<h4>Parametros GET probados</h4>" + (compact_list(inj_get) if inj_get else "<span class='muted'>Sin parametros GET probados.</span>")
+        + "<h4>Inputs de formulario probados</h4>"
+        + table(["Form action", "Input", "Metodo"], inj_form_rows, "Sin inputs de formulario probados.")
+        + "</div>"
+    )
+
     raw_content = (
         "<div class='panel'><h3>Estadisticas</h3><pre>"
         + esc(json.dumps(stats, indent=2, ensure_ascii=False))
@@ -2201,24 +1786,107 @@ def _build_html_report(report_data):
         + "</pre></div>"
     )
 
-    sections = [
-        ("resumen", "Resumen", overview_content),
-        ("info", "Informacion General", info_content),
-        ("nmap", "Nmap y NSE", nmap_content),
-        ("hallazgos", "Hallazgos", findings_content),
-        ("nuclei", "Nuclei", nuclei_content),
-        ("api", "API", api_content),
-        ("vhosts", "VHosts", vhost_content),
-        ("directorios", "Directorios", dir_content),
-        ("wordpress", "WordPress", wp_content),
-        ("spider", "Spidering", spider_content),
-        ("codigo", "Codigo Fuente", source_content),
-        ("ad", "Active Directory", ad_content),
-        ("credenciales", "Credenciales Web", creds_content),
-        ("raw", "Datos Completos", raw_content),
+    # Presencia: solo se muestran las secciones con informacion recopilada.
+    present = {
+        "resumen": True,
+        "info": bool(technologies or users or emails or general.get("headers") or general.get("cookies") or general.get("server")),
+        "nmap": bool(nmap_ports or nmap_nse),
+        "hallazgos": bool(findings),
+        "nuclei": bool(nuclei_findings or nuclei_summary),
+        "api": bool(api_endpoints),
+        "vhosts": bool(vhosts),
+        "directorios": bool(directories),
+        "exposicion": bool(robots_paths or http_methods or inj_get or inj_forms),
+        "wordpress": bool(wordpress),
+        "spider": bool(spider.get("total_urls") or spider.get("sample_urls")),
+        "codigo": bool(src_code.get("pages_analyzed") or src_findings),
+        "ad": bool(active_directory),
+        "credenciales": bool(creds),
+        "raw": bool(scan_data or stats),
+    }
+    all_sections = [
+        ("resumen", "Resumen", overview_content, None),
+        ("info", "Informacion General", info_content, len(technologies)),
+        ("nmap", "Nmap y NSE", nmap_content, len(nmap_ports)),
+        ("hallazgos", "Hallazgos", findings_content, len(findings)),
+        ("nuclei", "Nuclei", nuclei_content, len(nuclei_findings)),
+        ("api", "API", api_content, len(api_endpoints)),
+        ("vhosts", "VHosts", vhost_content, len(vhosts)),
+        ("directorios", "Directorios", dir_content, len(directories)),
+        ("exposicion", "Superficie expuesta", exposure_content, len(robots_paths) + len(http_methods)),
+        ("wordpress", "WordPress", wp_content, len(wordpress.get("vulnerabilities") or [])),
+        ("spider", "Spidering", spider_content, spider.get("total_urls", 0)),
+        ("codigo", "Codigo Fuente", source_content, len(src_findings)),
+        ("ad", "Active Directory", ad_content, len(ad_ldap.get("users") or [])),
+        ("credenciales", "Credenciales Web", creds_content, len(creds)),
+        ("raw", "Datos Completos", raw_content, None),
     ]
-    nav = "<nav class='side-nav'>" + "".join(f"<a href='#{sid}'>{esc(title)}</a>" for sid, title, _ in sections) + "</nav>"
-    section_html = "".join(section(sid, title, content) for sid, title, content in sections)
+    sections = [s for s in all_sections if present.get(s[0])]
+
+    SEC_ICON = {
+        "resumen": "gauge", "info": "info", "nmap": "network", "hallazgos": "warning-octagon",
+        "nuclei": "bug-beetle", "api": "brackets-curly", "vhosts": "globe-hemisphere-west",
+        "directorios": "folders", "exposicion": "eye", "wordpress": "wordpress-logo",
+        "spider": "share-network", "codigo": "code", "ad": "tree-structure",
+        "credenciales": "key", "raw": "database",
+    }
+
+    def nav_link(idx, sid, title, count):
+        cnt = "" if count in (None, 0) else f"<span class='ncount'>{esc(count)}</span>"
+        icon = SEC_ICON.get(sid, "circle")
+        return (
+            f"<a href='#{sid}' data-target='{sid}' title='{esc(title)}'>"
+            f"<i class='ph ph-{icon} nicon'></i>"
+            f"<span class='nidx'>{idx:02d}</span>"
+            f"<span class='ntext'>{esc(title)}</span>{cnt}</a>"
+        )
+
+    nav = "<nav class='side-nav'>" + "".join(
+        nav_link(i + 1, sid, title, count) for i, (sid, title, _c, count) in enumerate(sections)
+    ) + "</nav>"
+
+    def section_block(sid, title, count, content):
+        cnt = "" if count in (None,) else f"<span class='count'>{esc(count)}</span>"
+        icon = SEC_ICON.get(sid, "circle")
+        return (
+            f"<section id='{sid}' class='section'>"
+            f"<div class='section-head'><i class='ph ph-{icon} shic'></i><h2>{esc(title)}</h2>{cnt}"
+            f"<a class='toplink' href='#top' title='Volver arriba'><i class='ph ph-arrow-up'></i></a></div>"
+            f"{content}</section>"
+        )
+
+    section_html = "".join(section_block(sid, title, count, content) for sid, title, content, count in sections)
+
+    # Donut de severidad (conic-gradient) calculado en servidor
+    sev_palette = [
+        ("critical", "var(--c-crit)"), ("high", "var(--c-high)"), ("medium", "var(--c-med)"),
+        ("low", "var(--c-low)"), ("info", "var(--c-info)"),
+    ]
+    if sev_total:
+        acc = 0.0
+        stops = []
+        for key_, col in sev_palette:
+            c = sev_counts.get(key_, 0)
+            if not c:
+                continue
+            start = acc / sev_total * 360
+            acc += c
+            end = acc / sev_total * 360
+            stops.append(f"{col} {start:.2f}deg {end:.2f}deg")
+        donut_gradient = ", ".join(stops)
+    else:
+        donut_gradient = "var(--green) 0deg 360deg"
+    legend = "".join(
+        f"<span class='leg'><i style='background:{col}'></i>{esc(key_.capitalize())}<b>{sev_counts.get(key_, 0)}</b></span>"
+        for key_, col in sev_palette
+    )
+    risk_html = (
+        "<div class='riskcard'>"
+        f"<div class='donut' style='background:conic-gradient({donut_gradient})'>"
+        f"<div class='donut-hole'><span>RIESGO</span><strong class='risk-{risk_tone}'>{esc(risk_label)}</strong>"
+        f"<small>score {esc(risk_score)}</small></div></div>"
+        f"<div class='legend'>{legend}</div></div>"
+    )
 
     template = """<!doctype html>
 <html lang="es">
@@ -2226,109 +1894,294 @@ def _build_html_report(report_data):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WSTG Dashboard - __TITLE_TARGET__</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
 <style>
-:root {{
-  --bg:#f6f7f9; --surface:#ffffff; --surface-2:#f0f3f7; --text:#111827; --muted:#667085;
-  --line:#d9dee7; --blue:#2563eb; --green:#18865a; --amber:#b7791f; --red:#c2413b; --ink:#0f172a;
-}}
-[data-theme="dark"] {{
-  --bg:#111318; --surface:#181b22; --surface-2:#20242d; --text:#e7eaf0; --muted:#9aa3b2;
-  --line:#303642; --blue:#6ea8fe; --green:#55c792; --amber:#e0a94b; --red:#ff7875; --ink:#f8fafc;
-}}
-* {{ box-sizing:border-box; }}
-html {{ scroll-behavior:smooth; }}
-body {{ margin:0; background:var(--bg); color:var(--text); font-family:Inter,Segoe UI,Roboto,Arial,sans-serif; letter-spacing:0; }}
-a {{ color:inherit; }}
-code, pre {{ font-family:Consolas,Menlo,Monaco,monospace; }}
-.layout {{ display:grid; grid-template-columns:240px minmax(0,1fr); min-height:100vh; }}
-.side {{ position:sticky; top:0; height:100vh; padding:18px; border-right:1px solid var(--line); background:var(--surface); overflow:auto; }}
-.brand {{ display:flex; flex-direction:column; gap:4px; margin-bottom:18px; }}
-.brand strong {{ font-size:1rem; color:var(--ink); }}
-.brand span {{ color:var(--muted); font-size:.84rem; overflow-wrap:anywhere; }}
-.side-nav {{ display:flex; flex-direction:column; gap:4px; }}
-.side-nav a {{ text-decoration:none; color:var(--muted); padding:8px 10px; border-radius:8px; font-size:.92rem; }}
-.side-nav a:hover {{ background:var(--surface-2); color:var(--text); }}
-.theme-btn {{ width:100%; margin-top:16px; border:1px solid var(--line); background:var(--surface-2); color:var(--text); border-radius:8px; padding:8px 10px; cursor:pointer; text-align:left; }}
-.main {{ padding:22px; max-width:1500px; width:100%; }}
-.hero {{ display:flex; justify-content:space-between; gap:18px; align-items:flex-start; margin-bottom:18px; }}
-.hero h1 {{ margin:0; font-size:1.7rem; line-height:1.2; }}
-.hero p {{ margin:6px 0 0; color:var(--muted); overflow-wrap:anywhere; }}
-.kpis {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin:12px 0 18px; }}
-.metric {{ background:var(--surface); border:1px solid var(--line); border-left:4px solid var(--line); border-radius:8px; padding:10px; min-height:72px; }}
-.metric span {{ display:block; color:var(--muted); font-size:.82rem; }}
-.metric strong {{ display:block; margin-top:7px; font-size:1.45rem; color:var(--ink); }}
-.metric-good {{ border-left-color:var(--green); }} .metric-info {{ border-left-color:var(--blue); }}
-.metric-warn {{ border-left-color:var(--amber); }} .metric-bad {{ border-left-color:var(--red); }}
-.section {{ margin:0 0 22px; scroll-margin-top:18px; }}
-.section-head {{ display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--line); margin-bottom:10px; }}
-.section h2 {{ font-size:1.08rem; margin:0 0 8px; }}
-.panel {{ background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:10px; overflow:hidden; }}
-.panel h3 {{ margin:0 0 10px; font-size:.96rem; }}
-.panel h4 {{ margin:12px 0 6px; font-size:.86rem; color:var(--muted); }}
-.grid {{ display:grid; gap:10px; }} .grid.two {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
-.table-wrap {{ overflow:auto; border:1px solid var(--line); border-radius:8px; }}
-table {{ width:100%; border-collapse:separate; border-spacing:0; min-width:620px; }}
-th, td {{ text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top; font-size:.88rem; }}
-th {{ position:sticky; top:0; background:var(--surface-2); color:var(--muted); font-weight:650; }}
-tr:last-child td {{ border-bottom:none; }}
-td {{ overflow-wrap:anywhere; }}
-.empty {{ color:var(--muted); text-align:center; }}
-.muted {{ color:var(--muted); }}
-.badge {{ display:inline-flex; align-items:center; min-height:24px; padding:3px 8px; border-radius:999px; font-size:.78rem; font-weight:650; border:1px solid var(--line); background:var(--surface-2); white-space:nowrap; }}
-.badge-good {{ color:var(--green); background:color-mix(in srgb,var(--green) 10%,var(--surface)); }}
-.badge-info {{ color:var(--blue); background:color-mix(in srgb,var(--blue) 10%,var(--surface)); }}
-.badge-warn {{ color:var(--amber); background:color-mix(in srgb,var(--amber) 13%,var(--surface)); }}
-.badge-bad {{ color:var(--red); background:color-mix(in srgb,var(--red) 10%,var(--surface)); }}
-.chips {{ display:flex; flex-wrap:wrap; gap:6px; }}
-.chip {{ border:1px solid var(--line); background:var(--surface-2); border-radius:999px; padding:5px 8px; font-size:.82rem; }}
-pre {{ max-height:520px; overflow:auto; padding:12px; border-radius:8px; background:var(--surface-2); border:1px solid var(--line); white-space:pre-wrap; overflow-wrap:anywhere; }}
-details {{ border:1px solid var(--line); border-radius:8px; padding:8px; margin-bottom:8px; }}
-summary {{ cursor:pointer; color:var(--ink); font-weight:650; }}
-@media (max-width: 920px) {{
-  .layout {{ grid-template-columns:1fr; }}
-  .side {{ position:relative; height:auto; }}
-  .side-nav {{ flex-direction:row; flex-wrap:wrap; }}
-  .main {{ padding:14px; }}
-  .grid.two {{ grid-template-columns:1fr; }}
-  .hero {{ flex-direction:column; }}
-}}
+:root{
+  --bg:#f4f6fb; --surface:#ffffff; --surface-2:#eef1f6; --glass:rgba(255,255,255,.72); --text:#0f172a; --muted:#5b6675;
+  --line:#dde3ec; --blue:#2563eb; --green:#0f9d6b; --amber:#b7791f; --orange:#d9772b; --red:#d33a34;
+  --ink:#0b1220; --accent:#0aa87f; --accent-2:#2563eb; --glow:rgba(10,168,127,.18); --shadow:rgba(15,23,42,.10);
+  --c-crit:#d33a34; --c-high:#d9772b; --c-med:#caa11a; --c-low:#2563eb; --c-info:#8a93a3;
+  --grid-line:rgba(15,23,42,.035);
+  --font-head:"Space Grotesk","Segoe UI",sans-serif;
+  --sidew:266px;
+}
+[data-theme="dark"]{
+  --bg:#070a10; --surface:#0f141d; --surface-2:#161d29; --glass:rgba(15,20,29,.66); --text:#d6dde7; --muted:#7e8a99;
+  --line:#1e2735; --blue:#5b9dff; --green:#33d68f; --amber:#e7b85a; --orange:#ff9d57; --red:#ff6b6b;
+  --ink:#f4f7fb; --accent:#2ee6a6; --accent-2:#5b9dff; --glow:rgba(46,230,166,.22); --shadow:rgba(0,0,0,.45);
+  --c-crit:#ff6b6b; --c-high:#ff9d57; --c-med:#ffd24a; --c-low:#5b9dff; --c-info:#7e8a99;
+  --grid-line:rgba(46,230,166,.045);
+}
+*{ box-sizing:border-box; }
+html{ scroll-behavior:smooth; }
+body{ margin:0; background:var(--bg); color:var(--text);
+  font-family:Inter,"Segoe UI",Roboto,Arial,sans-serif; -webkit-font-smoothing:antialiased;
+  background-image:
+    radial-gradient(900px 480px at 100% -8%,var(--glow),transparent 60%),
+    radial-gradient(700px 420px at -8% 8%,color-mix(in srgb,var(--accent-2) 14%,transparent),transparent 60%),
+    linear-gradient(var(--grid-line) 1px,transparent 1px),
+    linear-gradient(90deg,var(--grid-line) 1px,transparent 1px);
+  background-size:auto,auto,34px 34px,34px 34px; background-attachment:fixed; }
+body::before{ content:""; position:fixed; top:0; left:0; right:0; height:3px; z-index:100;
+  background:linear-gradient(90deg,var(--accent),var(--accent-2),var(--c-high)); }
+h1,h2,h3,.brand-txt strong,.metric strong,.donut-hole strong{ font-family:var(--font-head); letter-spacing:-.01em; }
+a{ color:inherit; text-decoration:none; }
+code,pre{ font-family:"JetBrains Mono",Consolas,Menlo,Monaco,monospace; }
+::selection{ background:var(--glow); }
+.layout{ display:grid; grid-template-columns:var(--sidew) minmax(0,1fr); min-height:100vh; transition:grid-template-columns .22s ease; }
+.layout.collapsed{ --sidew:74px; }
+.side{ position:sticky; top:0; height:100vh; padding:16px 12px; border-right:1px solid var(--line);
+  background:var(--glass); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); overflow:auto; overflow-x:hidden; }
+.brand{ display:flex; align-items:center; gap:11px; padding:4px 6px 14px; margin-bottom:10px; border-bottom:1px solid var(--line); }
+.logo{ width:38px; height:38px; border-radius:11px; flex:0 0 auto; display:grid; place-items:center; position:relative;
+  background:linear-gradient(135deg,var(--accent),var(--accent-2)); color:#06281f; font-family:var(--font-head); font-weight:700; font-size:1.05rem;
+  box-shadow:0 0 0 3px var(--glow),0 6px 18px var(--shadow); }
+.brand-txt{ overflow:hidden; }
+.brand-txt strong{ display:block; font-size:1rem; color:var(--ink); font-weight:700; white-space:nowrap; }
+.brand-txt span{ display:block; color:var(--muted); font-size:.7rem; font-family:"JetBrains Mono",monospace; letter-spacing:.4px; text-transform:uppercase; white-space:nowrap; }
+.collapse-btn{ margin-left:auto; border:1px solid var(--line); background:var(--surface); color:var(--muted);
+  width:28px; height:28px; border-radius:8px; cursor:pointer; display:grid; place-items:center; flex:0 0 auto; transition:.15s; }
+.collapse-btn:hover{ border-color:var(--accent); color:var(--accent); }
+.collapse-btn svg{ transition:transform .22s ease; }
+.side-nav{ display:flex; flex-direction:column; gap:2px; }
+.side-nav a{ display:flex; align-items:center; gap:10px; color:var(--muted); padding:9px 11px; border-radius:10px;
+  font-size:.9rem; border-left:2px solid transparent; transition:.15s; white-space:nowrap; }
+.side-nav a:hover{ background:var(--surface-2); color:var(--text); }
+.side-nav a.active{ background:color-mix(in srgb,var(--accent) 12%,var(--surface)); color:var(--ink); border-left-color:var(--accent); }
+.side-nav a.active .nidx{ opacity:1; }
+.nicon{ font-size:1.15rem; color:var(--muted); flex:0 0 auto; width:20px; text-align:center; transition:color .15s; }
+.side-nav a:hover .nicon,.side-nav a.active .nicon{ color:var(--accent); }
+.nidx{ font-family:"JetBrains Mono",monospace; font-size:.66rem; color:var(--muted); opacity:.6; flex:0 0 auto; width:16px; text-align:center; }
+.ntext{ flex:1; overflow:hidden; text-overflow:ellipsis; }
+.ncount{ font-family:"JetBrains Mono",monospace; font-size:.72rem; background:var(--surface); border:1px solid var(--line);
+  border-radius:999px; padding:1px 7px; color:var(--muted); }
+.theme-btn{ width:100%; margin-top:14px; border:1px solid var(--line); background:var(--surface); color:var(--text);
+  border-radius:10px; padding:9px 11px; cursor:pointer; font-size:.86rem; display:flex; align-items:center; gap:9px; transition:.15s; white-space:nowrap; }
+.theme-btn:hover{ border-color:var(--accent); color:var(--ink); }
+.theme-btn #themeIcon{ flex:0 0 auto; width:18px; text-align:center; }
+.collapsed .brand{ justify-content:center; gap:0; }
+.collapsed .brand-txt,.collapsed .ntext,.collapsed .ncount,.collapsed .nidx,.collapsed #themeLabel,.collapsed .collapse-btn{ display:none; }
+.collapsed .side-nav a{ justify-content:center; padding:11px 0; }
+.collapsed .theme-btn{ justify-content:center; }
+.main{ padding:22px clamp(14px,3vw,36px) 40px; max-width:1580px; width:100%; }
+.topbar{ position:sticky; top:0; z-index:40; display:flex; align-items:center; gap:11px; flex-wrap:wrap;
+  margin:-22px calc(-1*clamp(14px,3vw,36px)) 18px; padding:14px clamp(14px,3vw,36px);
+  background:var(--glass); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); border-bottom:1px solid var(--line); }
+.menu-btn,.desk-collapse{ display:inline-flex; align-items:center; gap:6px; }
+.desk-collapse{ display:none; }
+.search{ flex:1; min-width:200px; display:flex; align-items:center; gap:8px; background:var(--surface);
+  border:1px solid var(--line); border-radius:11px; padding:9px 13px; transition:.15s; }
+.search:focus-within{ border-color:var(--accent); box-shadow:0 0 0 3px var(--glow); }
+.search input{ flex:1; border:0; background:transparent; color:var(--text); outline:none; font-size:.9rem; }
+.search input::placeholder{ color:var(--muted); }
+.btn{ border:1px solid var(--line); background:var(--surface); color:var(--text); border-radius:11px;
+  padding:9px 13px; font-size:.86rem; cursor:pointer; transition:.15s; display:inline-flex; align-items:center; gap:7px; }
+.btn:hover{ border-color:var(--accent); color:var(--ink); }
+.hero{ display:grid; grid-template-columns:1fr auto; gap:20px; align-items:center; margin-bottom:18px;
+  background:linear-gradient(135deg,var(--surface),var(--surface-2)); border:1px solid var(--line);
+  border-radius:18px; padding:26px; position:relative; overflow:hidden; box-shadow:0 12px 40px var(--shadow); }
+.hero::before{ content:""; position:absolute; inset:0; opacity:.5; pointer-events:none;
+  background:radial-gradient(420px 220px at 88% -30%,var(--glow),transparent 65%),radial-gradient(360px 200px at 60% 130%,color-mix(in srgb,var(--accent-2) 18%,transparent),transparent 60%); }
+.hero>*{ position:relative; z-index:1; }
+.eyebrow{ display:inline-flex; align-items:center; gap:8px; font-family:"JetBrains Mono",monospace; font-size:.72rem; color:var(--accent); letter-spacing:1.6px; text-transform:uppercase; }
+.eyebrow::before{ content:""; width:7px; height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 4px var(--glow); animation:pulse 2.4s ease-in-out infinite; }
+@keyframes pulse{ 0%,100%{ opacity:1; } 50%{ opacity:.35; } }
+.hero h1{ margin:10px 0 6px; font-size:2.55rem; line-height:1.08; color:var(--ink); font-weight:700; }
+.hero p{ margin:0; color:var(--muted); font-family:"JetBrains Mono",monospace; font-size:.9rem; overflow-wrap:anywhere; }
+.hero .tags{ margin-top:14px; display:flex; gap:8px; flex-wrap:wrap; }
+.riskcard{ display:flex; align-items:center; gap:18px; }
+.donut{ width:118px; height:118px; border-radius:50%; display:grid; place-items:center; flex:0 0 auto;
+  box-shadow:0 0 0 1px var(--line),0 14px 36px var(--shadow); animation:spin .9s ease-out; }
+@keyframes spin{ from{ transform:rotate(-120deg) scale(.85); opacity:0; } to{ transform:none; opacity:1; } }
+.donut-hole{ width:82px; height:82px; border-radius:50%; background:var(--surface); display:grid; place-content:center; text-align:center;
+  box-shadow:inset 0 0 12px var(--shadow); }
+.donut-hole span{ font-size:.58rem; letter-spacing:1.5px; color:var(--muted); font-family:"JetBrains Mono",monospace; }
+.donut-hole strong{ font-size:1rem; line-height:1.1; font-weight:700; }
+.donut-hole small{ font-size:.6rem; color:var(--muted); font-family:"JetBrains Mono",monospace; }
+.risk-bad{ color:var(--red); } .risk-warn{ color:var(--amber); } .risk-info{ color:var(--blue); } .risk-good{ color:var(--green); }
+.legend{ display:flex; flex-direction:column; gap:6px; min-width:118px; }
+.leg{ display:flex; align-items:center; gap:8px; font-size:.78rem; color:var(--muted); }
+.leg i{ width:9px; height:9px; border-radius:3px; flex:0 0 auto; }
+.leg b{ margin-left:auto; color:var(--text); font-family:"JetBrains Mono",monospace; }
+.kpis{ display:grid; grid-template-columns:repeat(auto-fit,minmax(152px,1fr)); gap:12px; margin:0 0 20px; }
+.metric{ background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:14px 15px; position:relative;
+  overflow:hidden; transition:transform .15s,box-shadow .15s,border-color .15s; }
+.metric::before{ content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--line); }
+.metric:hover{ transform:translateY(-3px); border-color:var(--accent); box-shadow:0 12px 28px var(--shadow); }
+.metric span{ display:block; color:var(--muted); font-size:.74rem; text-transform:uppercase; letter-spacing:.5px; }
+.metric strong{ display:block; margin-top:9px; font-size:1.7rem; color:var(--ink); font-weight:700; }
+.metric-good::before{ background:var(--green); } .metric-info::before{ background:var(--blue); }
+.metric-warn::before{ background:var(--amber); } .metric-bad::before{ background:var(--red); }
+.section{ margin:0 0 28px; scroll-margin-top:78px; }
+.section-head{ display:flex; align-items:center; gap:11px; border-bottom:1px solid var(--line); margin-bottom:13px; padding-bottom:8px; }
+.section-head .shic{ font-size:1.3rem; color:var(--accent); flex:0 0 auto; }
+.section-head h2{ font-size:1.2rem; margin:0; color:var(--ink); font-weight:600; }
+.metric span i{ margin-right:7px; color:var(--accent); font-size:.95rem; vertical-align:-1px; }
+a.metric{ color:inherit; }
+.btn i,.theme-btn i:not(#themeIcon),.toplink i{ font-size:1.05rem; vertical-align:-2px; }
+.section-head .count{ font-family:"JetBrains Mono",monospace; font-size:.74rem; color:var(--accent);
+  border:1px solid color-mix(in srgb,var(--accent) 35%,var(--line)); border-radius:999px; padding:1px 9px; }
+.toplink{ margin-left:auto; color:var(--muted); font-size:1.05rem; padding:1px 8px; border-radius:8px; }
+.toplink:hover{ color:var(--accent); background:var(--surface-2); }
+.panel{ background:var(--surface); border:1px solid var(--line); border-radius:15px; padding:15px; margin-bottom:12px; box-shadow:0 3px 14px var(--shadow); }
+.panel h3{ margin:0 0 12px; font-size:1rem; color:var(--ink); font-weight:600; display:flex; align-items:center; gap:9px; }
+.panel h3::before{ content:""; width:8px; height:8px; border-radius:3px; background:linear-gradient(135deg,var(--accent),var(--accent-2)); }
+.panel h4{ margin:14px 0 7px; font-size:.78rem; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+.grid{ display:grid; gap:12px; } .grid.two{ grid-template-columns:repeat(2,minmax(0,1fr)); }
+.table-wrap{ overflow:auto; border:1px solid var(--line); border-radius:12px; }
+table{ width:100%; border-collapse:separate; border-spacing:0; min-width:600px; }
+th,td{ text-align:left; padding:11px 13px; border-bottom:1px solid var(--line); vertical-align:top; font-size:.86rem; }
+th{ position:sticky; top:0; background:var(--surface-2); color:var(--muted); font-weight:700; text-transform:uppercase;
+  font-size:.7rem; letter-spacing:.6px; z-index:1; }
+tbody tr{ transition:background .12s; } tbody tr:hover{ background:var(--surface-2); }
+tr:last-child td{ border-bottom:none; }
+td{ overflow-wrap:anywhere; } td code{ font-size:.82rem; color:var(--accent); }
+.empty{ color:var(--muted); text-align:center; font-style:italic; }
+.muted{ color:var(--muted); }
+.badge{ display:inline-flex; align-items:center; min-height:22px; padding:2px 10px; border-radius:999px; font-size:.74rem;
+  font-weight:700; border:1px solid var(--line); background:var(--surface-2); white-space:nowrap; letter-spacing:.3px; }
+.badge-good{ color:var(--green); background:color-mix(in srgb,var(--green) 13%,var(--surface)); border-color:color-mix(in srgb,var(--green) 32%,var(--line)); }
+.badge-info{ color:var(--blue); background:color-mix(in srgb,var(--blue) 13%,var(--surface)); border-color:color-mix(in srgb,var(--blue) 32%,var(--line)); }
+.badge-warn{ color:var(--amber); background:color-mix(in srgb,var(--amber) 16%,var(--surface)); border-color:color-mix(in srgb,var(--amber) 32%,var(--line)); }
+.badge-bad{ color:var(--red); background:color-mix(in srgb,var(--red) 13%,var(--surface)); border-color:color-mix(in srgb,var(--red) 34%,var(--line)); }
+.chips{ display:flex; flex-wrap:wrap; gap:7px; }
+.chip{ border:1px solid var(--line); background:var(--surface-2); border-radius:9px; padding:5px 11px; font-size:.8rem;
+  font-family:"JetBrains Mono",monospace; transition:.15s; }
+.chip:hover{ border-color:var(--accent); color:var(--accent); }
+pre{ max-height:560px; overflow:auto; padding:15px; border-radius:12px; background:var(--surface-2); border:1px solid var(--line);
+  white-space:pre-wrap; overflow-wrap:anywhere; font-size:.8rem; line-height:1.55; }
+details{ border:1px solid var(--line); border-radius:12px; padding:11px 13px; margin-bottom:9px; background:var(--surface); }
+summary{ cursor:pointer; color:var(--ink); font-weight:600; }
+::-webkit-scrollbar{ width:10px; height:10px; }
+::-webkit-scrollbar-track{ background:transparent; }
+::-webkit-scrollbar-thumb{ background:var(--line); border-radius:999px; border:2px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover{ background:var(--muted); }
+.hidden-row{ display:none !important; }
+@media (max-width:980px){
+  .layout,.layout.collapsed{ grid-template-columns:1fr; --sidew:266px; }
+  .side{ position:fixed; z-index:60; width:280px; transform:translateX(-100%); transition:transform .22s; box-shadow:0 0 40px var(--shadow); }
+  .side.open{ transform:translateX(0); }
+  .menu-btn{ display:inline-flex; } .desk-collapse{ display:none !important; }
+  .collapsed .brand-txt,.collapsed .ntext,.collapsed .ncount,.collapsed #themeLabel{ display:block; }
+  .collapsed .collapse-btn{ display:grid; }
+  .main{ padding:16px; } .topbar{ margin:-16px -16px 16px; padding:12px 16px; }
+  .grid.two{ grid-template-columns:1fr; }
+  .hero{ grid-template-columns:1fr; } .hero h1{ font-size:1.95rem; }
+  .riskcard{ justify-content:flex-start; }
+}
+@media (prefers-reduced-motion:reduce){ *{ animation:none !important; transition:none !important; } }
+@media print{
+  @page{ margin:14mm 12mm; }
+  /* Forzar paleta clara en PDF: maxima legibilidad y ahorro de tinta */
+  :root,[data-theme="dark"]{
+    --bg:#ffffff; --surface:#ffffff; --surface-2:#f3f5f9; --glass:#ffffff; --text:#16202e; --muted:#54606e;
+    --line:#cfd6e2; --ink:#0b1220; --accent:#0a8f6c; --accent-2:#2358d8; --glow:transparent; --shadow:transparent;
+    --c-crit:#c2271f; --c-high:#c25e15; --c-med:#9a7d0a; --c-low:#2358d8; --c-info:#6b7480;
+  }
+  *{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; box-shadow:none !important; }
+  .side,.topbar,.toplink,body::before,.collapse-btn{ display:none !important; }
+  html,body{ background:#fff !important; background-image:none !important; color:var(--text) !important; }
+  .layout,.layout.collapsed{ display:block !important; grid-template-columns:1fr !important; }
+  .main{ padding:0 !important; max-width:none !important; }
+  .hero{ margin-top:4px; }
+  /* Evitar cortes feos entre paginas */
+  .panel,.metric,details,.table-wrap,.riskcard,.donut,.kpis,img{ break-inside:avoid; page-break-inside:avoid; }
+  tr{ break-inside:avoid; page-break-inside:avoid; }
+  thead{ display:table-header-group; } th{ position:static !important; }
+  .section{ break-inside:auto; margin-bottom:18px; }
+  .section-head,h1,h2,h3,h4{ break-after:avoid; page-break-after:avoid; }
+  /* Mostrar contenido completo (sin recortes de scroll) */
+  pre{ max-height:none !important; overflow:visible !important; }
+  .table-wrap{ overflow:visible !important; } table{ min-width:0 !important; }
+  /* Respiro extra para que nada quede pegado a los bordes */
+  section.section:first-of-type{ padding-top:2px; }
+}
 </style>
 </head>
 <body>
-<div class="layout">
-  <aside class="side">
+<span id="top"></span>
+<div class="layout" id="layout">
+  <aside class="side" id="sidebar">
     <div class="brand">
-      <strong>WSTG Scanner</strong>
-      <span>__TARGET__</span>
-      <span>__DATE__</span>
+      <div class="logo"><i class="ph-fill ph-shield-check"></i></div>
+      <div class="brand-txt">
+        <strong>WSTG&nbsp;Scanner</strong>
+        <span>Security Report</span>
+      </div>
+      <button class="collapse-btn desk-collapse" id="collapseBtn" type="button" title="Colapsar menu" aria-label="Colapsar menu">
+        <i id="collapseIcon" class="ph ph-caret-left"></i>
+      </button>
     </div>
     __NAV__
-    <button id="themeBtn" class="theme-btn" type="button">Cambiar tema</button>
+    <button id="themeBtn" class="theme-btn" type="button"><i id="themeIcon" class="ph ph-moon"></i> <span id="themeLabel">Tema</span></button>
   </aside>
   <main class="main">
-    <div class="hero">
-      <div>
-        <h1>Security Assessment Dashboard</h1>
-        <p>__TARGET__</p>
-      </div>
-      <span class="badge badge-info">WSTG v__TOOL__</span>
+    <div class="topbar">
+      <button class="btn menu-btn" id="menuBtn" type="button"><i class="ph ph-list"></i> <span>Menu</span></button>
+      <button class="btn desk-collapse" id="collapseBtn2" type="button" title="Colapsar barra lateral"><i class="ph ph-sidebar-simple"></i></button>
+      <label class="search"><i class="ph ph-magnifying-glass muted"></i><input id="q" type="search" placeholder="Filtrar tablas (host, puerto, CVE, hash...)"></label>
+      <button class="btn" onclick="window.print()" type="button"><i class="ph ph-file-pdf"></i> <span>Exportar PDF</span></button>
     </div>
+    <section class="hero">
+      <div>
+        <div class="eyebrow">OWASP WSTG // Security Assessment</div>
+        <h1>OWASP Web Security Testing Scanner</h1>
+        <p>__TARGET__</p>
+        <div class="tags">
+          <span class="badge badge-info">WSTG v__TOOL__</span>
+          <span class="badge badge-__RISK_TONE__">Riesgo __RISK_LABEL__</span>
+          <span class="badge">__DATE__</span>
+        </div>
+      </div>
+      __RISK__
+    </section>
     __SECTIONS__
   </main>
 </div>
 <script>
-(function() {{
-  var root = document.documentElement;
-  var key = "wstg_dashboard_theme";
-  var stored = localStorage.getItem(key);
-  var initial = stored || ((window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light");
-  root.setAttribute("data-theme", initial);
-  document.getElementById("themeBtn").addEventListener("click", function() {{
-    var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
-    root.setAttribute("data-theme", next);
-    localStorage.setItem(key, next);
-  }});
-}})();
+(function(){
+  var root=document.documentElement, key="wstg_dashboard_theme";
+  var stored=localStorage.getItem(key);
+  var initial=stored||((window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light");
+  function paint(t){ root.setAttribute("data-theme",t);
+    var i=document.getElementById("themeIcon"), l=document.getElementById("themeLabel");
+    if(i) i.className="ph "+((t==="dark")?"ph-sun":"ph-moon"); if(l) l.textContent=(t==="dark")?"Modo claro":"Modo oscuro"; }
+  paint(initial);
+  document.getElementById("themeBtn").addEventListener("click",function(){
+    var next=root.getAttribute("data-theme")==="dark"?"light":"dark"; paint(next); localStorage.setItem(key,next); });
+  var sb=document.getElementById("sidebar"), mb=document.getElementById("menuBtn");
+  if(mb) mb.addEventListener("click",function(){ sb.classList.toggle("open"); });
+  // Colapsar sidebar (desktop) con persistencia
+  var layout=document.getElementById("layout"), ck="wstg_sidebar_collapsed";
+  function setCollapse(c){ layout.classList.toggle("collapsed",c);
+    var ic=document.getElementById("collapseIcon"); if(ic) ic.style.transform=c?"rotate(180deg)":"none"; }
+  setCollapse(localStorage.getItem(ck)==="1");
+  function toggleCollapse(){ var c=!layout.classList.contains("collapsed"); setCollapse(c); localStorage.setItem(ck,c?"1":"0"); }
+  ["collapseBtn","collapseBtn2"].forEach(function(id){ var b=document.getElementById(id);
+    if(b) b.addEventListener("click",function(){ if(window.innerWidth<=980){ sb.classList.toggle("open"); } else { toggleCollapse(); } }); });
+  // Scrollspy
+  var links=[].slice.call(document.querySelectorAll(".side-nav a"));
+  var map={}; links.forEach(function(a){ map[a.getAttribute("data-target")]=a; });
+  var obs=new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting){ links.forEach(function(a){a.classList.remove("active");});
+      var a=map[e.target.id]; if(a) a.classList.add("active"); } });
+  },{rootMargin:"-12% 0px -80% 0px"});
+  document.querySelectorAll("section.section").forEach(function(s){ obs.observe(s); });
+  links.forEach(function(a){ a.addEventListener("click",function(){ if(window.innerWidth<=980) sb.classList.remove("open"); }); });
+  // Filtro de tablas
+  var q=document.getElementById("q");
+  if(q) q.addEventListener("input",function(){
+    var v=q.value.trim().toLowerCase();
+    document.querySelectorAll("tbody tr").forEach(function(tr){
+      if(tr.querySelector("td.empty")) return;
+      tr.classList.toggle("hidden-row", v && tr.textContent.toLowerCase().indexOf(v)===-1);
+    });
+  });
+})();
 </script>
 </body>
 </html>"""
@@ -2338,6 +2191,9 @@ summary {{ cursor:pointer; color:var(--ink); font-weight:650; }}
         .replace("__TARGET__", esc(report_data.get("target", "")))
         .replace("__DATE__", esc(report_data.get("date", "")))
         .replace("__TOOL__", esc(report_data.get("tool", "")))
+        .replace("__RISK_TONE__", risk_tone)
+        .replace("__RISK_LABEL__", esc(risk_label))
+        .replace("__RISK__", risk_html)
         .replace("__NAV__", nav)
         .replace("__SECTIONS__", section_html)
     )

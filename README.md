@@ -53,11 +53,11 @@ Diseñada para bug bounty hunters y pentesters, automatiza tareas comunes de rec
 - 🔌 Detección y testing de APIs (IDOR, Mass Assignment, GraphQL, JWT, CORS)
 - 🔍 **Escaneo de puertos con Nmap** (`-sV` para detección de servicios y versiones)
 - 🌐 **Fuzzing de subdominios (vhost)** con `ffuf` y baseline `Content-Length`
- - 🌐 **Fuzzing de subdominios (vhost)** con `ffuf` y baseline `Content-Length`
- - 🧩 **WordPress / WPScan** – Integración opcional con `wpscan` para enumeración de usuarios, detección de plugins/themes vulnerables y ataques dirigidos a instalaciones WordPress.
+- 🧩 **WordPress / WPScan** – enumeración de usuarios, detección de plugins/temas vulnerables y ataques dirigidos
+- 🏛️ **Pentesting de Active Directory** – Kerbrute, LDAP, NetExec (nxc) e Impacket (AS-REP Roasting y Kerberoasting)
 - 👤 Enumeración de usuarios y emails
 - 🔐 Fuerza bruta con **hydra** + fallback CSRF-aware y **autodetección del mensaje de error**
-- 📊 Reportes en **TXT, JSON, HTML y Markdown** (con tema light/dark, hallazgos agrupados por categoría)
+- 📊 Reportes en **TXT, JSON, Markdown y HTML** (dashboard SaaS con tema claro/oscuro, exportable a PDF)
 
 ---
 
@@ -135,10 +135,22 @@ Diseñada para bug bounty hunters y pentesters, automatiza tareas comunes de rec
 - Reutiliza los formularios e inputs detectados por el spider (eficiente)
 
 ### 🐘 Enumeración y ataques WordPress
-- Enumeración de usuarios y rutas de login.
-- Detecta versiones de core, plugins y temas.
-- Busca vulnerabilidades conocidas (CVE) en plugins/themes.
+- Enumera usuarios y rutas de login.
+- Detecta la versión del core, los plugins y los temas instalados.
+- Busca vulnerabilidades conocidas (CVE) en plugins y temas.
 - Realiza fuerza bruta del login con wordlists.
+
+### 🏛️ Pentesting de Active Directory
+Módulo dedicado (opción **13** del menú) que orquesta las herramientas estándar de AD de Kali. Funciona en dos modos: **sin credenciales** (solo enumeración) o **autenticado** (usuario/contraseña para ataques más profundos).
+
+- **Enumeración de usuarios** con `kerbrute userenum` a partir de una wordlist.
+- **Consultas LDAP** (`ldapsearch`) para listar usuarios, grupos y equipos del dominio.
+- **SMB con NetExec** (`nxc smb`) para enumeración y *password spraying* / fuerza bruta.
+- **AS-REP Roasting** con `impacket-GetNPUsers` sobre los usuarios sin pre-autenticación Kerberos.
+- **Kerberoasting** con `impacket-GetUserSPNs -request` para extraer hashes de cuentas de servicio.
+- Todos los hashes y credenciales obtenidos quedan integrados en los reportes (sección *Active Directory*).
+
+> **Herramientas recomendadas:** `kerbrute`, `ldap-utils`, `netexec`/`nxc` e `impacket-scripts`.
 
 ### 🔌 Testing de APIs (OWASP API Top 10)
 - **Descubrimiento de endpoints** (`/api`, `/swagger`, `/graphql`, `/actuator`, etc.) y parsing de OpenAPI
@@ -180,6 +192,7 @@ Diseñada para bug bounty hunters y pentesters, automatiza tareas comunes de rec
 | hydra | Última | ❌ Opcional (mejora el bruteforce) |
 | whatweb | Última | ❌ Opcional (mejora fingerprinting) |
 | wpscan | Última | ❌ Opcional (enumeración y ataques WordPress) |
+| kerbrute, ldap-utils, netexec/nxc, impacket-scripts | Última | ❌ Opcional (módulo de Active Directory) |
 | SecLists | Última | ❌ Opcional (wordlists) |
 
 ### Requisitos del Sistema
@@ -283,7 +296,7 @@ developed by @afsh4ck
 ====================================================
  1. Configurar autenticación (login)
  2. Información general y enumeración
- 3. Escaneo de puertos con Nmap (-sV)
+ 3. Escaneo de puertos con Nmap (-sV + NSE dirigido)
  4. Análisis de vulnerabilidades con Nuclei
  5. Fuzzing de subdominios (vhost) con ffuf
  6. Fuzzing de directorios (usa ffuf si está instalado)
@@ -292,17 +305,22 @@ developed by @afsh4ck
  9. Pruebas de inyección (SQLi, XSS, Path Traversal, Command Injection)
 10. Pruebas de API (descubrimiento, IDOR, mass assignment)
 11. Enumeración de usuarios/emails y fuerza bruta de contraseñas
-12. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)
-15. Salir
-==================================================
+12. Enumeración y ataques WordPress (WPScan)
+13. Pentesting Active Directory (Kerbrute/LDAP/NXC)
+14. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)
+15. Mostrar resumen en Markdown          (solo tras escanear)
+16. Mostrar tablas de resultados         (solo tras escanear)
+17. Salir
+====================================================
 Selecciona una opción:
 ```
 
-> Tras ejecutar algún módulo o el pentesting completo aparecen también las opciones **13** (`Mostrar resumen en Markdown`) y **14** (`Mostrar tablas de resultados`) para revisar el resumen sin volver a escanear.
+**Cómo leer el menú:**
 
-> La opción **12** ejecuta secuencialmente: información → **Nmap** → Nuclei → **vhost** → fuzzing dirs → spidering → **análisis de código fuente** → inyección → API → bruteforce, y muestra al final el resumen visual con todas las tablas. Al salir, se ofrece guardar el reporte.
->
-> Las opciones **13** y **14** sirven para revisar el resumen tras un escaneo: la 13 imprime todo en Markdown (listo para pegar en GitBook/GitHub) y la 14 reimprime las tablas con el formato visual box-drawing.
+- **Opciones 2–13** ejecutan cada fase de forma independiente. Puedes lanzarlas en cualquier orden; los resultados se acumulan en la misma sesión.
+- **Opción 1** configura el login una sola vez: a partir de ahí, todas las fases reutilizan la sesión autenticada (cookies y cabeceras).
+- **Opción 14 — Pentesting completo:** encadena automáticamente información → Nmap → Nuclei → vhost → directorios → spidering → código fuente → inyección → API → WordPress → bruteforce. El módulo de Active Directory es opcional y se pregunta antes de ejecutarlo. Al terminar muestra todas las tablas y ofrece guardar el reporte.
+- **Opciones 15 y 16** solo aparecen cuando ya hay datos de un escaneo. Sirven para revisar resultados sin volver a escanear: la **15** imprime el resumen en Markdown (listo para pegar en GitBook/GitHub) y la **16** reimprime las tablas con el formato visual.
 
 ---
 
@@ -313,22 +331,20 @@ Los reportes se generan automáticamente en `reports/<host>/<host>.{txt,json,htm
 | Formato | Contenido |
 |---|---|
 | `*.txt` | Resumen plano + secciones por categoría (general, vhost, spider, **análisis de código fuente**, API, directorios, credenciales, hallazgos, Nuclei) |
-| `*.json` | Datos serializados completos (ideal para integración con otras herramientas) |
-| `*.html` | Reporte visual con tema **light/dark**, hallazgos agrupados por categoría, tabla detallada de Nuclei, tecnologías como chips |
-| `*.md`  | Resumen completo en **Markdown** estándar — copia/pega directo en GitBook, GitHub o Obsidian |
+| `*.json` | Datos serializados completos (ideal para integrar con otras herramientas) |
+| `*.html` | **Dashboard SaaS** en un único archivo: tema claro/oscuro, barra lateral colapsable, buscador de tablas y exportación a PDF |
+| `*.md`  | Resumen completo en **Markdown** estándar — copia/pega directo en GitBook, GitHub u Obsidian |
 
-### Estructura del reporte HTML
-- **Resumen** – KPIs (hallazgos, tecnologías, endpoints, vhosts, **puertos**, directorios, usuarios, credenciales, **hallazgos en código fuente**)
-- **Información general** – Server, status, tecnologías (chips), usuarios y emails
-- **Escaneo de puertos (Nmap)** – Tabla con `puerto / estado / servicio / versión` + comando y host usados
-- **Hallazgos** – Agrupados en bloques colapsables por categoría (Vulnerabilidades / Nuclei por severidad / Puertos / Subdominios / Directorios / etc.)
-- **Análisis Nuclei** – Resumen por severidad + tabla detallada (sin duplicados)
-- **Endpoints API descubiertos** – Tabla con status/endpoint/URL/content-type
-- **Subdominios (vhosts) descubiertos** – Tabla con status/fqdn/tamaño
-- **Directorios encontrados** – Tabla con status/URL/tamaño
-- **Credenciales válidas** – Si el bruteforce tuvo éxito
-- **Spidering** – Muestra de URLs descubiertas
-- **Análisis de código fuente** – KPIs por severidad y tabla con `severidad / tipo / valor detectado / URL / contexto`
+### El dashboard HTML
+
+El reporte HTML es un **dashboard interactivo autocontenido** (un solo archivo, sin dependencias locales):
+
+- 🎨 **Tema claro/oscuro** con detección automática del sistema y conmutador persistente.
+- 🧭 **Barra lateral colapsable** con navegación e indicador de la sección activa al hacer scroll.
+- 🔎 **Buscador en vivo** que filtra todas las tablas (host, puerto, CVE, hash…).
+- 📊 **Resumen visual** con tarjetas-KPI (enlazadas a su sección) y un medidor de riesgo por severidad.
+- 🖨️ **Exportación a PDF** optimizada (paleta clara, márgenes y sin cortes entre páginas).
+- 🧩 **Solo se muestran las secciones con datos.** Las disponibles son: Resumen, Información general, Nmap y NSE, Hallazgos, Nuclei, API, VHosts, Directorios, Superficie expuesta (robots/métodos/inyección), WordPress, Spidering, Código fuente, **Active Directory**, Credenciales y un volcado JSON completo.
 
 ---
 
@@ -457,42 +473,16 @@ Unauthorized access to computer systems is illegal."
 ---
 
 ### Agradecimientos
-- [OWASP](https://owasp.org/) por la guía WSTG y el API Top 10
+- [OWASP](https://owasp.org/) por la guía WSTG y el API Security Top 10
 - [ProjectDiscovery](https://github.com/projectdiscovery) por Nuclei
 - [Daniel Miessler](https://github.com/danielmiessler) por SecLists
 - [van Hauser](https://github.com/vanhauser-thc) por Hydra
-ras de progreso, control de errores elegante, mensajes claros y visibles.
-- **Configuración avanzada**: Personalización de wordlists, timeout, hilos, delay, uso de proxies, etc.
-- **Código limpio y modular**: Fácil de mantener y extender.
 
 ---
 
-<div align="center">
+## 🆕 Actualizaciones recientes
 
-⭐ Si te fue útil, ¡dale una estrella! ⭐
-
-</div>
-
-Licencia
-MIT License.
-
-Agradecimientos
-OWASP por la guía WSTG.
-
-Daniel Miessler por SecLists.
-
----
-
-## Actualizaciones recientes
-
-- Nmap ejecuta un segundo escaneo dirigido con NSE (`default,vuln,safe`) sobre los puertos abiertos encontrados por `-sV`.
-- WhatWeb, ffuf, Nuclei, Hydra, WPScan y scripts NSE HTTP reutilizan cookies/cabeceras de la sesion autenticada cuando estan disponibles.
-- El reporte HTML se genera como dashboard profesional con tablas visuales y un bloque final de JSON completo para conservar todos los datos recopilados.
-- Nuevo modulo de Pentesting Active Directory con Kerbrute, LDAP, NXC/NetExec e Impacket:
-  - `kerbrute userenum` para enumeracion de usuarios.
-  - `ldapsearch` para usuarios, grupos y equipos.
-  - `nxc smb` para enumeracion y fuerza bruta/password spraying.
-  - `impacket-GetNPUsers dominio/ -usersfile valid-users.txt -dc-ip <DC>` para AS-REP Roasting.
-  - `impacket-GetUserSPNs dominio/usuario:password -dc-ip <DC> -request` para Kerberoasting.
-
-Herramientas Kali recomendadas para AD: `kerbrute`, `ldap-utils`, `netexec`/`nxc` e `impacket-scripts`.
+- **Active Directory**: nuevo módulo con Kerbrute, LDAP, NetExec (nxc) e Impacket (AS-REP Roasting y Kerberoasting). Ver [Pentesting de Active Directory](#️-pentesting-de-active-directory).
+- **Nmap + NSE**: tras el escaneo `-sV`, lanza un segundo pase dirigido con NSE (`default,vuln,safe`) sobre los puertos abiertos.
+- **Sesión autenticada compartida**: WhatWeb, ffuf, Nuclei, Hydra, WPScan y los scripts NSE de HTTP reutilizan las cookies y cabeceras de la sesión cuando están disponibles.
+- **Nuevo dashboard HTML**: reporte de una sola página con tema claro/oscuro, barra lateral colapsable, buscador de tablas y exportación a PDF. Incluye el volcado JSON completo para no perder ningún dato.
