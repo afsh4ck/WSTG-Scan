@@ -337,7 +337,7 @@ Los reportes se generan automáticamente en `reports/<host>/<host>.{txt,json,htm
 
 ### El dashboard HTML
 
-<img width="3436" height="1852" alt="image" src="https://github.com/user-attachments/assets/352632d7-bcaa-4d4e-8d3a-701fa5fcf69a" />
+<img width="3440" height="1920" alt="image" src="https://github.com/user-attachments/assets/4c5ea1ad-112d-4ad7-a1f4-2965fd25c3c6" />
 
 El reporte HTML es un **dashboard interactivo** tipo Saas profesional:
 
