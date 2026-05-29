@@ -61,7 +61,7 @@ Diseñada para bug bounty hunters y pentesters, automatiza tareas comunes de rec
 - 🔐 Fuerza bruta con **hydra** + fallback CSRF-aware y **autodetección del mensaje de error**
 - 📊 Reportes en **TXT, JSON, Markdown y HTML** (dashboard SaaS con tema claro/oscuro, exportable a PDF)
 
-VIDEO COMPLETO
+## ☠️ Video Completo
 
 https://youtu.be/-zMs3HmNVvg
 ---
