@@ -2819,6 +2819,8 @@ def save_report(output_file=None):
         "scan_data": _to_serializable(SCAN_DATA),
     }
 
+    saved = []
+    errors = []
     try:
         with open(txt_file, 'w', encoding='utf-8') as f:
             f.write(f"WSTG Scanner v{VERSION} - Reporte de Escaneo\n")
@@ -3040,23 +3042,41 @@ def save_report(output_file=None):
                     f.write(f"- [{sev}] {tid}" + (f" — {name}" if name else "") +
                             (f" @ {url}" if url else "") + "\n")
 
+        saved.append(("TXT", txt_file))
+    except Exception as e:
+        errors.append(("TXT", e))
+
+    try:
         with open(json_file, 'w', encoding='utf-8') as f:
             json.dump(report_data, f, indent=2, ensure_ascii=False)
+        saved.append(("JSON", json_file))
+    except Exception as e:
+        errors.append(("JSON", e))
 
+    try:
         html_content = _build_html_report(report_data)
         with open(html_file, 'w', encoding='utf-8') as f:
             f.write(html_content)
+        saved.append(("HTML", html_file))
+    except Exception as e:
+        errors.append(("HTML", e))
 
+    try:
         md_content = _build_markdown_report(report_data)
         with open(md_file, 'w', encoding='utf-8') as f:
             f.write(md_content)
-
-        base_path = os.path.splitext(txt_file)[0]
-        print_good(
-            f"Reportes guardados en {base_path}.{{txt,json,html,md}}"
-        )
+        saved.append(("MD", md_file))
     except Exception as e:
-        print_error(f"No se pudo guardar el reporte: {e}")
+        errors.append(("MD", e))
+
+    if saved:
+        base_path = os.path.splitext(txt_file)[0]
+        exts = ",".join(fmt.lower() for fmt, _ in saved)
+        print_good(f"Reportes guardados en {base_path}.{{{exts}}}")
+    for fmt, err in errors:
+        print_error(f"No se pudo generar el reporte {fmt}: {err}")
+    if not saved:
+        print_error("No se pudo guardar ningun formato de reporte.")
 
 def normalize_url(url):
     if not url.startswith(('http://', 'https://')):
@@ -7051,6 +7071,10 @@ def run_active_directory_pentest(target=None):
         "raw_commands": [],
     }
 
+    def _adtrim(value, width=80):
+        text = str(value if value is not None else "-")
+        return text if len(text) <= width else text[: width - 1] + "…"
+
     if not any(result["tools"].values()):
         print_warning("No se encontraron kerbrute, ldapsearch ni nxc/netexec en PATH.")
         print_warning("En Kali puedes instalar/actualizar herramientas AD desde apt o repos oficiales.")
@@ -7076,6 +7100,14 @@ def run_active_directory_pentest(target=None):
             result["raw_commands"].append(run)
             for user in valid_users:
                 _append_finding_once(f"[AD:USER] {user}")
+            if valid_users:
+                print_table(
+                    headers=["#", "Usuario válido (Kerbrute)"],
+                    rows=[[str(i), _adtrim(u, 60)] for i, u in enumerate(valid_users, 1)],
+                    alignments=['>', '<'],
+                    title=f"Kerbrute — usuarios válidos ({len(valid_users)}):",
+                    border_color=Fore.GREEN,
+                )
         elif user_wl:
             print_warning(f"No se pudo leer la wordlist de usuarios: {user_wl}")
     else:
@@ -7101,10 +7133,40 @@ def run_active_directory_pentest(target=None):
                 result["ldap"]["users"] = _normalize_ldap_users(entries)
                 for user in result["ldap"]["users"]:
                     _append_finding_once(f"[AD:LDAP:USER] {user.get('username')}")
+                ldap_users_now = result["ldap"]["users"]
+                if ldap_users_now:
+                    print_table(
+                        headers=["Usuario", "Nombre", "UPN"],
+                        rows=[[_adtrim(u.get("username") or "-", 30),
+                               _adtrim(u.get("cn") or "-", 35),
+                               _adtrim(u.get("upn") or "-", 45)] for u in ldap_users_now[:30]],
+                        alignments=['<', '<', '<'],
+                        title=f"LDAP — usuarios ({len(ldap_users_now)}):",
+                    )
             elif label == "groups":
                 result["ldap"]["groups"] = _normalize_ldap_groups(entries)
+                ldap_groups_now = result["ldap"]["groups"]
+                if ldap_groups_now:
+                    print_table(
+                        headers=["Grupo", "Descripción", "Miembros"],
+                        rows=[[_adtrim(g.get("name") or "-", 35),
+                               _adtrim(g.get("description") or "-", 45),
+                               str(len(g.get("members") or []))] for g in ldap_groups_now[:30]],
+                        alignments=['<', '<', '>'],
+                        title=f"LDAP — grupos ({len(ldap_groups_now)}):",
+                    )
             elif label == "computers":
                 result["ldap"]["computers"] = _normalize_ldap_computers(entries)
+                ldap_computers_now = result["ldap"]["computers"]
+                if ldap_computers_now:
+                    print_table(
+                        headers=["Equipo", "Sistema operativo", "Versión"],
+                        rows=[[_adtrim(c.get("name") or "-", 40),
+                               _adtrim(c.get("os") or "-", 35),
+                               _adtrim(c.get("os_version") or "-", 18)] for c in ldap_computers_now[:30]],
+                        alignments=['<', '<', '<'],
+                        title=f"LDAP — equipos ({len(ldap_computers_now)}):",
+                    )
             command_data = {
                 "label": run.get("label"),
                 "command": run.get("command"),
@@ -7162,6 +7224,13 @@ def run_active_directory_pentest(target=None):
                 result["raw_commands"].append(run)
                 if hashes:
                     print_good(f"AS-REP Roasting: {len(hashes)} hash(es) capturado(s).")
+                    print_table(
+                        headers=["Usuario", "Hash AS-REP"],
+                        rows=[[_adtrim(h.get("username") or "-", 28), _adtrim(h.get("hash") or "-", 90)] for h in hashes[:20]],
+                        alignments=['<', '<'],
+                        title=f"AS-REP Roasting ({len(hashes)}):",
+                        border_color=Fore.YELLOW,
+                    )
                 for item in hashes:
                     _append_finding_once(f"[AD:ASREP] {item.get('username') or 'usuario'} hash AS-REP roastable")
     else:
@@ -7204,6 +7273,13 @@ def run_active_directory_pentest(target=None):
                 result["raw_commands"].append(run)
                 if hashes:
                     print_good(f"Kerberoasting: {len(hashes)} hash(es) TGS capturado(s).")
+                    print_table(
+                        headers=["Usuario/SPN", "Hash TGS"],
+                        rows=[[_adtrim(h.get("username") or "-", 28), _adtrim(h.get("hash") or "-", 90)] for h in hashes[:20]],
+                        alignments=['<', '<'],
+                        title=f"Kerberoasting ({len(hashes)}):",
+                        border_color=Fore.YELLOW,
+                    )
                 for item in hashes:
                     _append_finding_once(f"[AD:KERBEROAST] {item.get('username') or 'usuario'} SPN Kerberoastable")
     else:
@@ -7259,6 +7335,15 @@ def run_active_directory_pentest(target=None):
                 result["raw_commands"].append(run_brute)
                 for cred in creds:
                     _append_finding_once(f"[AD:CRED] {cred.get('username')}:{cred.get('password')}")
+                if creds:
+                    print_table(
+                        headers=["Usuario", "Contraseña"],
+                        rows=[[f"{Fore.GREEN}{_adtrim(c.get('username') or '-', 40)}{Style.RESET_ALL}",
+                               f"{Fore.GREEN}{_adtrim(c.get('password') or '-', 40)}{Style.RESET_ALL}"] for c in creds],
+                        alignments=['<', '<'],
+                        title=f"NXC — credenciales válidas ({len(creds)}):",
+                        border_color=Fore.GREEN,
+                    )
     else:
         print_warning("nxc/netexec no esta instalado o no esta en PATH. Saltando SMB/NXC.")
 
