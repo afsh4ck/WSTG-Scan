@@ -22,6 +22,8 @@
 ---
 
 <img width="2062" height="1258" alt="image" src="https://github.com/user-attachments/assets/2f1cc379-f672-429f-978c-d70b1f201fff" />
+<img width="3440" height="1920" alt="image" src="https://github.com/user-attachments/assets/aac7aed1-cc98-4e97-a123-60a0263c8350" />
+
 
 ## 📋 Tabla de Contenidos
 
