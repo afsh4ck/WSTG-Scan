@@ -1423,7 +1423,7 @@ def _build_html_report(report_data):
             tone = "bad"
         return badge(text, tone)
 
-    def table(headers, rows, empty="Sin datos.", raw_cols=None):
+    def table(headers, rows, empty="Sin datos.", raw_cols=None, row_attrs=None):
         raw_cols = set(raw_cols or [])
         if not rows:
             return (
@@ -1434,14 +1434,17 @@ def _build_html_report(report_data):
                 + "</tbody></table></div>"
             )
         body = []
-        for row in rows:
+        for i, row in enumerate(rows):
             cells = []
             for idx, cell in enumerate(row):
                 if idx in raw_cols:
                     cells.append(f"<td>{cell}</td>")
                 else:
                     cells.append(f"<td>{esc(cell)}</td>")
-            body.append("<tr>" + "".join(cells) + "</tr>")
+            attr = ""
+            if row_attrs and i < len(row_attrs) and row_attrs[i]:
+                attr = " " + " ".join(f'{k}="{v}"' for k, v in row_attrs[i].items())
+            body.append(f"<tr{attr}>" + "".join(cells) + "</tr>")
         return (
             "<div class='table-wrap'><table><thead><tr>"
             + "".join(f"<th>{esc(h)}</th>" for h in headers)
@@ -1472,13 +1475,16 @@ def _build_html_report(report_data):
     ad_creds = ((ad_nxc.get("bruteforce") or {}).get("credentials", []) or [])
 
     # Conteo de severidad combinado (Nuclei + codigo fuente) para el resumen visual
+    _sev_known = {"critical", "high", "medium", "low", "info"}
     sev_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for n in nuclei_findings:
         s = (n.get("severity") or "info").lower()
-        sev_counts[s] = sev_counts.get(s, 0) + 1
+        s = s if s in _sev_known else "info"
+        sev_counts[s] += 1
     for f in src_findings:
         s = (f.get("severity") or "low").lower()
-        sev_counts[s] = sev_counts.get(s, 0) + 1
+        s = s if s in _sev_known else "low"
+        sev_counts[s] += 1
     sev_total = sum(sev_counts.values())
     risk_score = sev_counts["critical"] * 10 + sev_counts["high"] * 5 + sev_counts["medium"] * 2 + sev_counts["low"]
     if sev_counts["critical"]:
@@ -1623,18 +1629,20 @@ def _build_html_report(report_data):
     findings_content = "<div class='panel'>" + table(["Categoria", "Total", "Detalle"], finding_rows, "Sin hallazgos.", raw_cols={2}) + "</div>"
 
     nuclei_summary_rows = [[sev.upper(), status_badge(sev.upper()), len(tids), ", ".join(sorted(set(map(str, tids))))] for sev, tids in sorted(nuclei_summary.items(), key=lambda x: sev_rank.get(x[0], 99))]
+    _nuclei_sorted = sorted(nuclei_findings, key=lambda x: (sev_rank.get((x.get("severity") or "unknown"), 99), x.get("template_id", "")))
     nuclei_rows = [[
         status_badge((n.get("severity") or "unknown").upper()),
         n.get("template_id", "-"),
         n.get("name", "-"),
         n.get("url", "-"),
         ", ".join(n.get("tags") or []) if isinstance(n.get("tags"), list) else n.get("tags", "-"),
-    ] for n in sorted(nuclei_findings, key=lambda x: (sev_rank.get((x.get("severity") or "unknown"), 99), x.get("template_id", "")))]
+    ] for n in _nuclei_sorted]
+    nuclei_row_attrs = [{"data-sev": (n.get("severity") or "info").lower()} for n in _nuclei_sorted]
     nuclei_content = (
         "<div class='panel'><h3>Resumen por severidad</h3>"
         + table(["Severidad", "Estado", "Total", "Templates"], nuclei_summary_rows, "Sin resumen Nuclei.", raw_cols={1})
         + "</div><div class='panel'><h3>Hallazgos</h3>"
-        + table(["Severidad", "Template", "Nombre", "URL", "Tags"], nuclei_rows, "Sin hallazgos Nuclei.", raw_cols={0})
+        + table(["Severidad", "Template", "Nombre", "URL", "Tags"], nuclei_rows, "Sin hallazgos Nuclei.", raw_cols={0}, row_attrs=nuclei_row_attrs)
         + "</div>"
     )
 
@@ -1690,13 +1698,15 @@ def _build_html_report(report_data):
         + "</div>"
     )
 
+    _src_sorted = sorted(src_findings, key=lambda x: sev_rank.get((x.get("severity") or "low").lower(), 99))
     src_rows = [[
         status_badge((f.get("severity") or "-").upper()),
         f.get("type", "-"),
         f.get("value", "-"),
         f.get("url", "-"),
         f.get("snippet", "-"),
-    ] for f in sorted(src_findings, key=lambda x: sev_rank.get((x.get("severity") or "low").lower(), 99))]
+    ] for f in _src_sorted]
+    src_row_attrs = [{"data-sev": (f.get("severity") or "low").lower()} for f in _src_sorted]
     source_content = (
         "<div class='panel'><h3>Resumen</h3>"
         + table(["Metrica", "Valor"], [
@@ -1709,7 +1719,7 @@ def _build_html_report(report_data):
             ["Low", (src_code.get("summary") or {}).get("low", 0)],
         ])
         + "</div><div class='panel'><h3>Detalle</h3>"
-        + table(["Severidad", "Tipo", "Valor", "URL", "Contexto"], src_rows, "Sin hallazgos en codigo fuente.", raw_cols={0})
+        + table(["Severidad", "Tipo", "Valor", "URL", "Contexto"], src_rows, "Sin hallazgos en codigo fuente.", raw_cols={0}, row_attrs=src_row_attrs)
         + "</div>"
     )
 
@@ -1874,6 +1884,43 @@ def _build_html_report(report_data):
 
     section_html = "".join(section_block(sid, title, count, content) for sid, title, content, count in sections)
 
+    # Barra de filtros: criticidad + tipo de seccion
+    _sev_filter_items = [
+        ("critical", "Critical", "c-crit"),
+        ("high", "High", "c-high"),
+        ("medium", "Medium", "c-med"),
+        ("low", "Low", "c-low"),
+        ("info", "Info", "c-info"),
+    ]
+    sev_chips = "".join(
+        f"<button class='fchip fchip-{key}' data-filter-sev='{key}'>"
+        f"{label} <b>{sev_counts.get(key, 0)}</b></button>"
+        for key, label, _ in _sev_filter_items
+        if sev_counts.get(key, 0) > 0
+    )
+    sec_chips = "".join(
+        f"<button class='fchip' data-filter-sec='{sid}'>{sec_icon_html(sid, 'nicon')} {esc(title)}</button>"
+        for sid, title, _, count in sections
+        if sid not in ("resumen", "raw")
+    )
+    filter_html = (
+        "<div class='filter-bar' id='filterBar'>"
+        "<div class='filter-group'>"
+        "<span class='filter-lbl'><i class='ph ph-funnel'></i> Criticidad</span>"
+        "<div class='filter-chips'>"
+        "<button class='fchip active' data-filter-sev='all'>Todos</button>"
+        f"{sev_chips}</div></div>"
+        + (
+            "<div class='filter-group'>"
+            "<span class='filter-lbl'><i class='ph ph-squares-four'></i> Seccion</span>"
+            "<div class='filter-chips'>"
+            "<button class='fchip active' data-filter-sec='all'>Todas</button>"
+            f"{sec_chips}</div></div>"
+            if sec_chips else ""
+        )
+        + "</div>"
+    ) if (sev_chips or sec_chips) else ""
+
     # Donut de severidad (conic-gradient) calculado en servidor
     sev_palette = [
         ("critical", "var(--c-crit)"), ("high", "var(--c-high)"), ("medium", "var(--c-med)"),
@@ -1943,8 +1990,6 @@ body{ margin:0; background:var(--bg); color:var(--text);
     linear-gradient(var(--grid-line) 1px,transparent 1px),
     linear-gradient(90deg,var(--grid-line) 1px,transparent 1px);
   background-size:auto,auto,34px 34px,34px 34px; background-attachment:fixed; }
-body::before{ content:""; position:fixed; top:0; left:0; right:0; height:3px; z-index:100;
-  background:linear-gradient(90deg,var(--accent),var(--accent-2),var(--c-high)); }
 h1,h2,h3,.brand-txt strong,.metric strong,.donut-hole strong{ font-family:var(--font-head); letter-spacing:-.01em; }
 a{ color:inherit; text-decoration:none; }
 code,pre{ font-family:"JetBrains Mono",Consolas,Menlo,Monaco,monospace; }
@@ -1977,14 +2022,24 @@ svg.nicon{ display:inline-block; vertical-align:-2px; } svg.shic{ display:inline
 .ntext{ flex:1; overflow:hidden; text-overflow:ellipsis; }
 .ncount{ font-family:"JetBrains Mono",monospace; font-size:.72rem; background:var(--surface); border:1px solid var(--line);
   border-radius:999px; padding:1px 7px; color:var(--muted); }
-.theme-btn{ width:100%; margin-top:14px; border:1px solid var(--line); background:var(--surface); color:var(--text);
-  border-radius:10px; padding:9px 11px; cursor:pointer; font-size:.86rem; display:flex; align-items:center; gap:9px; transition:.15s; white-space:nowrap; }
-.theme-btn:hover{ border-color:var(--accent); color:var(--ink); }
-.theme-btn #themeIcon{ flex:0 0 auto; width:18px; text-align:center; }
 .collapsed .brand{ justify-content:center; gap:0; }
 .collapsed .brand-txt,.collapsed .ntext,.collapsed .ncount,.collapsed #themeLabel{ display:none; }
 .collapsed .side-nav a{ justify-content:center; padding:11px 0; }
-.collapsed .theme-btn{ justify-content:center; }
+.filter-bar{ display:flex; flex-wrap:wrap; gap:14px; margin-bottom:20px; padding:14px 16px;
+  background:var(--surface); border:1px solid var(--line); border-radius:14px; }
+.filter-group{ display:flex; align-items:flex-start; gap:8px; flex-wrap:wrap; }
+.filter-lbl{ font-size:.74rem; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.5px;
+  padding-top:7px; white-space:nowrap; display:flex; align-items:center; gap:5px; }
+.filter-chips{ display:flex; flex-wrap:wrap; gap:5px; }
+.fchip{ border:1px solid var(--line); background:var(--surface-2); color:var(--muted); border-radius:9px;
+  padding:5px 11px; font-size:.78rem; cursor:pointer; transition:.15s; display:inline-flex; align-items:center; gap:5px; }
+.fchip:hover{ border-color:var(--accent); color:var(--ink); }
+.fchip.active{ background:color-mix(in srgb,var(--accent) 14%,var(--surface)); border-color:var(--accent); color:var(--ink); font-weight:600; }
+.fchip b{ font-family:"JetBrains Mono",monospace; font-size:.72rem; }
+.fchip-critical{ --fc:var(--c-crit); } .fchip-high{ --fc:var(--c-high); }
+.fchip-medium{ --fc:var(--c-med); } .fchip-low{ --fc:var(--c-low); } .fchip-info{ --fc:var(--c-info); }
+.fchip-critical.active,.fchip-high.active,.fchip-medium.active,.fchip-low.active,.fchip-info.active{
+  background:color-mix(in srgb,var(--fc) 14%,var(--surface)); border-color:var(--fc); color:var(--fc); }
 .main{ padding:22px clamp(14px,3vw,36px) 40px; max-width:1580px; width:100%; }
 .topbar{ position:sticky; top:0; z-index:40; display:flex; align-items:center; gap:11px; flex-wrap:wrap;
   margin:-22px calc(-1*clamp(14px,3vw,36px)) 18px; padding:14px clamp(14px,3vw,36px);
@@ -2079,7 +2134,7 @@ summary{ cursor:pointer; color:var(--ink); font-weight:600; }
 ::-webkit-scrollbar-track{ background:transparent; }
 ::-webkit-scrollbar-thumb{ background:var(--line); border-radius:999px; border:2px solid var(--bg); }
 ::-webkit-scrollbar-thumb:hover{ background:var(--muted); }
-.hidden-row{ display:none !important; }
+.hidden-row,.sev-hidden{ display:none !important; }
 @media (max-width:980px){
   .layout,.layout.collapsed{ grid-template-columns:1fr; --sidew:266px; }
   .side{ position:fixed; z-index:60; width:280px; transform:translateX(-100%); transition:transform .22s; box-shadow:0 0 40px var(--shadow); }
@@ -2101,7 +2156,7 @@ summary{ cursor:pointer; color:var(--ink); font-weight:600; }
     --c-crit:#c2271f; --c-high:#c25e15; --c-med:#9a7d0a; --c-low:#2358d8; --c-info:#6b7480;
   }
   *{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; box-shadow:none !important; }
-  .side,.topbar,.toplink,body::before,.collapse-btn,.menu-fab{ display:none !important; }
+  .side,.topbar,.toplink,.collapse-btn,.menu-fab{ display:none !important; }
   html,body{ background:#fff !important; background-image:none !important; color:var(--text) !important; }
   .layout,.layout.collapsed{ display:block !important; grid-template-columns:1fr !important; }
   .main{ padding:0 14mm !important; max-width:none !important; }
@@ -2133,7 +2188,6 @@ summary{ cursor:pointer; color:var(--ink); font-weight:600; }
       </div>
     </div>
     __NAV__
-    <button id="themeBtn" class="theme-btn" type="button"><i id="themeIcon" class="ph ph-moon"></i> <span id="themeLabel">Tema</span></button>
   </aside>
   <button class="collapse-btn" id="collapseBtn" type="button" title="Colapsar / expandir menu" aria-label="Colapsar o expandir menu">
     <i id="collapseIcon" class="ph ph-caret-left"></i>
@@ -2142,6 +2196,7 @@ summary{ cursor:pointer; color:var(--ink); font-weight:600; }
     <div class="topbar">
       <label class="search"><i class="ph ph-magnifying-glass muted"></i><input id="q" type="search" placeholder="Filtrar tablas (host, puerto, CVE, hash...)"></label>
       <button class="btn" onclick="window.print()" type="button"><i class="ph ph-file-pdf"></i> <span>Exportar PDF</span></button>
+      <button id="themeBtn" class="btn theme-btn" type="button" aria-label="Cambiar tema"><i id="themeIcon" class="ph ph-moon"></i> <span id="themeLabel">Tema</span></button>
     </div>
     <section class="hero">
       <div>
@@ -2156,6 +2211,7 @@ summary{ cursor:pointer; color:var(--ink); font-weight:600; }
       </div>
       __RISK__
     </section>
+    __FILTERS__
     __SECTIONS__
   </main>
 </div>
@@ -2189,15 +2245,37 @@ summary{ cursor:pointer; color:var(--ink); font-weight:600; }
   },{rootMargin:"-12% 0px -80% 0px"});
   document.querySelectorAll("section.section").forEach(function(s){ obs.observe(s); });
   links.forEach(function(a){ a.addEventListener("click",function(){ if(window.innerWidth<=980) sb.classList.remove("open"); }); });
-  // Filtro de tablas
-  var q=document.getElementById("q");
-  if(q) q.addEventListener("input",function(){
-    var v=q.value.trim().toLowerCase();
+  // Filtros: texto, severidad, seccion
+  var activeSev="all", activeSec="all";
+  function applyRowFilters(){
+    var qv=document.getElementById("q"); var v=qv?qv.value.trim().toLowerCase():"";
     document.querySelectorAll("tbody tr").forEach(function(tr){
-      if(tr.querySelector("td.empty")) return;
-      tr.classList.toggle("hidden-row", v && tr.textContent.toLowerCase().indexOf(v)===-1);
+      if(tr.querySelector("td.empty")){ tr.classList.remove("hidden-row","sev-hidden"); return; }
+      var sev=tr.getAttribute("data-sev")||"";
+      tr.classList.toggle("sev-hidden", activeSev!=="all" && sev && sev!==activeSev);
+      tr.classList.toggle("hidden-row", !!(v && tr.textContent.toLowerCase().indexOf(v)===-1));
+    });
+  }
+  function applySecFilter(){
+    document.querySelectorAll("section.section").forEach(function(s){
+      if(activeSec==="all"||s.id==="resumen"){ s.style.display=""; return; }
+      s.style.display=(s.id===activeSec)?"":"none";
+    });
+  }
+  document.querySelectorAll("[data-filter-sev]").forEach(function(btn){
+    btn.addEventListener("click",function(){
+      document.querySelectorAll("[data-filter-sev]").forEach(function(b){b.classList.remove("active");});
+      btn.classList.add("active"); activeSev=btn.getAttribute("data-filter-sev"); applyRowFilters();
     });
   });
+  document.querySelectorAll("[data-filter-sec]").forEach(function(btn){
+    btn.addEventListener("click",function(){
+      document.querySelectorAll("[data-filter-sec]").forEach(function(b){b.classList.remove("active");});
+      btn.classList.add("active"); activeSec=btn.getAttribute("data-filter-sec"); applySecFilter();
+    });
+  });
+  var q=document.getElementById("q");
+  if(q) q.addEventListener("input", applyRowFilters);
 })();
 </script>
 </body>
@@ -2212,6 +2290,7 @@ summary{ cursor:pointer; color:var(--ink); font-weight:600; }
         .replace("__RISK_LABEL__", esc(risk_label))
         .replace("__RISK__", risk_html)
         .replace("__NAV__", nav)
+        .replace("__FILTERS__", filter_html)
         .replace("__SECTIONS__", section_html)
     )
 
