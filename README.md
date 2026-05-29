@@ -1,4 +1,4 @@
-# 🔐 OWASP Web Security Testing Scanner
+# 🔍 OWASP Web Security Testing Scanner
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.8+-blue.svg" alt="Python">
@@ -337,14 +337,16 @@ Los reportes se generan automáticamente en `reports/<host>/<host>.{txt,json,htm
 
 ### El dashboard HTML
 
-El reporte HTML es un **dashboard interactivo autocontenido** (un solo archivo, sin dependencias locales):
+<img width="3436" height="1852" alt="image" src="https://github.com/user-attachments/assets/352632d7-bcaa-4d4e-8d3a-701fa5fcf69a" />
+
+El reporte HTML es un **dashboard interactivo** tipo Saas profesional:
 
 - 🎨 **Tema claro/oscuro** con detección automática del sistema y conmutador persistente.
 - 🧭 **Barra lateral colapsable** con navegación e indicador de la sección activa al hacer scroll.
 - 🔎 **Buscador en vivo** que filtra todas las tablas (host, puerto, CVE, hash…).
 - 📊 **Resumen visual** con tarjetas-KPI (enlazadas a su sección) y un medidor de riesgo por severidad.
 - 🖨️ **Exportación a PDF** optimizada (paleta clara, márgenes y sin cortes entre páginas).
-- 🧩 **Solo se muestran las secciones con datos.** Las disponibles son: Resumen, Información general, Nmap y NSE, Hallazgos, Nuclei, API, VHosts, Directorios, Superficie expuesta (robots/métodos/inyección), WordPress, Spidering, Código fuente, **Active Directory**, Credenciales y un volcado JSON completo.
+- 🧩 **Solo se muestran las secciones con datos.** Las disponibles son: Resumen, Información general, Nmap y NSE, Hallazgos, Nuclei, API, VHosts, Directorios, Superficie expuesta, WordPress, Spidering, Código fuente, **Active Directory**, Credenciales y un volcado JSON completo.
 
 ---
 
@@ -450,7 +452,7 @@ Este proyecto está bajo la licencia **MIT**. Ver [LICENSE](LICENSE) para detall
 
 ## ⚠️ Disclaimer
 
-**IMPORTANTE**: Esta herramienta solo debe usarse en sistemas donde tienes permiso explícito para realizar testing de seguridad.
+**IMPORTANTE**: Esta herramienta solo debe usarse en sistemas donde tienes permiso explícito para realizar pruebas de seguridad.
 
 - ❌ **El uso no autorizado es ILEGAL**
 - ❌ El autor **NO se hace responsable** del mal uso
@@ -477,12 +479,3 @@ Unauthorized access to computer systems is illegal."
 - [ProjectDiscovery](https://github.com/projectdiscovery) por Nuclei
 - [Daniel Miessler](https://github.com/danielmiessler) por SecLists
 - [van Hauser](https://github.com/vanhauser-thc) por Hydra
-
----
-
-## 🆕 Actualizaciones recientes
-
-- **Active Directory**: nuevo módulo con Kerbrute, LDAP, NetExec (nxc) e Impacket (AS-REP Roasting y Kerberoasting). Ver [Pentesting de Active Directory](#️-pentesting-de-active-directory).
-- **Nmap + NSE**: tras el escaneo `-sV`, lanza un segundo pase dirigido con NSE (`default,vuln,safe`) sobre los puertos abiertos.
-- **Sesión autenticada compartida**: WhatWeb, ffuf, Nuclei, Hydra, WPScan y los scripts NSE de HTTP reutilizan las cookies y cabeceras de la sesión cuando están disponibles.
-- **Nuevo dashboard HTML**: reporte de una sola página con tema claro/oscuro, barra lateral colapsable, buscador de tablas y exportación a PDF. Incluye el volcado JSON completo para no perder ningún dato.
