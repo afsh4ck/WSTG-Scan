@@ -62,10 +62,7 @@ Diseñada para bug bounty hunters y pentesters, automatiza tareas comunes de rec
 - 📊 Reportes en **TXT, JSON, Markdown y HTML** (dashboard SaaS con tema claro/oscuro, exportable a PDF)
 
 ## ☠️ Video Completo
-[![HackLabs Preview](https://github.com/user-attachments/assets/da3054ce-f946-433f-a731-cead61f7d096)](https://youtu.be/-zMs3HmNVvg)
-<img width="1080" height="659" alt="wstg-video" src="https://github.com/user-attachments/assets/cf26228c-0914-4ee7-ad85-c06ea5f4713c" />
-
-
+[![HackLabs Preview](https://github.com/user-attachments/assets/cf26228c-0914-4ee7-ad85-c06ea5f4713c)](https://youtu.be/-zMs3HmNVvg)
 
 ---
 
