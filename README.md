@@ -70,11 +70,12 @@ Diseñada para bug bounty hunters y pentesters, automatiza tareas comunes de rec
 
 ### 🔐 Autenticación
 - **Pre-autenticación** – Login automático con credenciales (Basic Auth o formulario)
-- **Validación real de credenciales** – Basic Auth solo se da por bueno si el servidor envía el desafío `401 WWW-Authenticate: Basic` y luego acepta las credenciales; en formularios se detectan mensajes de fallo (ES/EN) y se rechaza si la respuesta sigue mostrando el campo de contraseña (sin falsos positivos)
-- **Login con usuario o email** – Un solo campo identificador; detecta el tipo por `@` y rellena el campo de formulario correcto (`user`/`login` o `email`/`correo`)
-- **User-Agent personalizado** – Aplicable tanto al login con credenciales como al modo manual
-- **Modo manual de sesión** – Carga cookie/token, cabecera `Authorization` y cabeceras extra; valida la sesión reaccediendo al objetivo antes de confiar en ella
-- **Verificación post-login** – Tras autenticar, confirma que la sesión persiste (detecta redirecciones/CSRF que invalidan el login)
+- **Login headless (Playwright)** – Para SPAs (Angular, Vue, React) y flujos OAuth2/OIDC/PKCE donde no existe `<form>` HTML; detecta campos de email/usuario en dos pasos y extrae cookies de sesión del navegador
+- **Validación real de credenciales** – Basic Auth solo se da por bueno si el servidor envía el desafío `401 WWW-Authenticate: Basic`; en formularios detecta mensajes de fallo (ES/EN) y rechaza si la respuesta sigue mostrando el campo de contraseña
+- **Login con usuario o email** – Un solo campo identificador; detecta el tipo por `@` y rellena el campo de formulario correcto
+- **User-Agent personalizado** – Aplicable al login con credenciales, headless y modo manual
+- **Modo manual de sesión** – Carga cookie/token, cabecera `Authorization` y cabeceras extra; valida la sesión antes de confiar en ella
+- **Verificación post-login** – Confirma que la sesión persiste tras autenticar
 - **Sesión persistente** – Todas las pruebas posteriores usan la sesión autenticada
 - Manejo de cookies y campos hidden (CSRF tokens)
 
@@ -150,8 +151,16 @@ Diseñada para bug bounty hunters y pentesters, automatiza tareas comunes de rec
 - Busca vulnerabilidades conocidas (CVE) en plugins y temas.
 - Realiza fuerza bruta del login con wordlists.
 
+### 🔥 Pruebas Avanzadas de Seguridad (opción 10)
+- **SSRF** – Payloads contra parámetros URL (`url`, `redirect`, `src`, …) y cabeceras (`X-Forwarded-For`, `X-Original-URL`, …); detecta respuestas de metadatos cloud (AWS IMDSv1, GCP, Alibaba); soporte OOB via colaborador externo (Burp, interactsh)
+- **SSTI** – Detección por math probes para Jinja2, Twig, FreeMarker, ERB, Pebble, Tornado; identifica el engine y detección por mensajes de error de template
+- **XXE** – Descubre endpoints XML/SOAP (`/xmlrpc.php`, `/soap`, `/api/xml`, WSDL); inyecta entidades externas con `file:///etc/passwd`, hostname y SSRF via DTD externo
+- **CRLF Injection** – Payloads `%0d%0a` en path y parámetros de redirección; verifica cabeceras inyectadas en respuestas sin seguimiento de redireccionamiento
+- **HTTP Request Smuggling** – Usa `smuggler.py` si está disponible; prueba manual CL.TE con socket raw; instrucciones para instalar smuggler.py si falta
+- **Cache Poisoning** – Inyecta `X-Forwarded-Host`, `X-Host`, `X-Original-URL` con valor aleatorio único; verifica si el valor persiste en respuesta posterior sin la cabecera (cache confirmed); detecta presencia de cache via `X-Cache`/`Age`/`CF-Cache-Status`
+
 ### 🏛️ Pentesting de Active Directory
-Módulo dedicado (opción **13** del menú) que orquesta las herramientas estándar de AD de Kali. Funciona en dos modos: **sin credenciales** (solo enumeración) o **autenticado** (usuario/contraseña para ataques más profundos).
+Módulo dedicado (opción **14** del menú) que orquesta las herramientas estándar de AD de Kali. Funciona en dos modos: **sin credenciales** (solo enumeración) o **autenticado** (usuario/contraseña para ataques más profundos).
 
 - **Enumeración de usuarios** con `kerbrute userenum` a partir de una wordlist.
 - **Consultas LDAP** (`ldapsearch`) para listar usuarios, grupos y equipos del dominio.
@@ -165,8 +174,8 @@ Módulo dedicado (opción **13** del menú) que orquesta las herramientas están
 ### 🔌 Testing de APIs (OWASP API Top 10)
 - **Descubrimiento de endpoints** (`/api`, `/swagger`, `/graphql`, `/actuator`, etc.) y parsing de OpenAPI
 - **IDOR / BOLA (API1)** – Modificación de IDs numéricos, UUID y parámetros
-- **JWT (API2)** – Detección, análisis de `alg`, claims de privilegio, expiración
-- **Rate Limiting (API4)** – Comprobación con 20 requests consecutivos
+- **JWT (API2)** – Detección, `alg:none` bypass activo, RS256→HS256 key confusion, `kid` path traversal/SQLi, brute force de secreto HMAC con wordlist, claims de privilegio, token caducado aceptado
+- **Rate Limiting (API4)** – 429, soft-block por latencia progresiva, captcha, ban por IP (403 repetido)
 - **Auth Bypass (API5)** – Cabeceras `X-Original-URL`, `X-Forwarded-For`, etc.
 - **Mass Assignment (API6)** – Inyección de `is_admin`, `role`, `privilege`
 - **Verbose Errors (API7)** – Detección de stack traces y rutas internas
@@ -288,7 +297,7 @@ python3 wstg-scan.py
 # Se valida la sesión; las siguientes pruebas usarán la sesión autenticada
 ```
 
-> **SPA / OAuth2 (SSO):** si el login se renderiza en JavaScript (Angular/Vue/React) o usa OAuth2/PKCE, el login por formulario HTTP no aplica. Usa el **modo manual**: inicia sesión en el navegador, copia la cookie de sesión completa y pégala en la opción 1.
+> **SPA / OAuth2 (SSO):** si el login se renderiza en JavaScript (Angular/Vue/React) o usa OAuth2/PKCE, el tool intentará automáticamente el login headless con Playwright. Si Playwright no está instalado, se ofrecerá instalarlo. Como alternativa usa el **modo manual**: inicia sesión en el navegador, copia la cookie completa y pégala en la opción 1.
 
 ---
 
@@ -306,9 +315,9 @@ OWASP Web Security Testing Scanner
 developed by @afsh4ck
 
 ====================================================
-  WSTG SCANNER v1.2.0  [Sin autenticación]
+  WSTG SCANNER v1.3.0  [Sin autenticación]
 ====================================================
- 1. Configurar autenticación (login)
+ 1. Configurar autenticación (login / headless SPA / OAuth2)
  2. Información general y enumeración
  3. Escaneo de puertos con Nmap (-sV + NSE dirigido)
  4. Análisis de vulnerabilidades con Nuclei
@@ -317,24 +326,26 @@ developed by @afsh4ck
  7. Spidering / Mapeo completo del sitio
  8. Análisis de código fuente (credenciales/secretos en HTML y JS)
  9. Pruebas de inyección (SQLi, XSS, Path Traversal, Command Injection)
-10. Pruebas de API (descubrimiento, IDOR, mass assignment)
-11. Enumeración de usuarios/emails y fuerza bruta de contraseñas
-12. Enumeración y ataques WordPress (WPScan)
-13. Pentesting Active Directory (Kerbrute/LDAP/NXC)
-14. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)
-15. Mostrar resumen en Markdown          (solo tras escanear)
-16. Mostrar tablas de resultados         (solo tras escanear)
-17. Salir
+10. Pruebas avanzadas (SSRF / SSTI / XXE / CRLF / Smuggling / Cache)
+11. Pruebas de API (descubrimiento, IDOR, mass assignment, JWT, Rate limit)
+12. Enumeración de usuarios/emails y fuerza bruta de contraseñas
+13. Enumeración y ataques WordPress (WPScan)
+14. Pentesting Active Directory (Kerbrute/LDAP/NXC)
+15. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)
+16. Mostrar resumen en Markdown          (solo tras escanear)
+17. Mostrar tablas de resultados         (solo tras escanear)
+18. Salir
 ====================================================
 Selecciona una opción:
 ```
 
 **Cómo leer el menú:**
 
-- **Opciones 2–13** ejecutan cada fase de forma independiente. Puedes lanzarlas en cualquier orden; los resultados se acumulan en la misma sesión.
-- **Opción 1** configura el login una sola vez: a partir de ahí, todas las fases reutilizan la sesión autenticada (cookies y cabeceras).
-- **Opción 14 — Pentesting completo:** encadena automáticamente información → Nmap → Nuclei → vhost → directorios → spidering → código fuente → inyección → API → WordPress → bruteforce. El módulo de Active Directory es opcional y se pregunta antes de ejecutarlo. Al terminar muestra todas las tablas y ofrece guardar el reporte.
-- **Opciones 15 y 16** solo aparecen cuando ya hay datos de un escaneo. Sirven para revisar resultados sin volver a escanear: la **15** imprime el resumen en Markdown (listo para pegar en GitBook/GitHub) y la **16** reimprime las tablas con el formato visual.
+- **Opciones 2–14** ejecutan cada fase de forma independiente. Puedes lanzarlas en cualquier orden; los resultados se acumulan en la misma sesión.
+- **Opción 1** configura el login una sola vez: Basic Auth, formulario HTML, login headless Playwright (SPA/OAuth2) o sesión manual (cookie/token).
+- **Opción 10 — Pruebas avanzadas:** SSRF (parámetros URL + cabeceras + metadatos cloud), SSTI (Jinja2/Twig/FreeMarker/ERB), XXE, CRLF injection, HTTP Request Smuggling (via smuggler.py o prueba manual CL.TE) y Cache Poisoning.
+- **Opción 15 — Pentesting completo:** encadena automáticamente información → Nmap → Nuclei → vhost → directorios → spidering → código fuente → inyección → pruebas avanzadas → API → bruteforce → WordPress → Active Directory (opcional). Al terminar muestra todas las tablas y ofrece guardar el reporte.
+- **Opciones 16 y 17** solo aparecen cuando ya hay datos de un escaneo. Sirven para revisar resultados sin volver a escanear: la **16** imprime el resumen en Markdown (listo para pegar en GitBook/GitHub) y la **17** reimprime las tablas con el formato visual.
 
 ---
 

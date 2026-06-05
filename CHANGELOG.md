@@ -1,5 +1,24 @@
 # Registro de cambios
 
+## Sin publicar - 2026-06-05 (v1.3.0)
+
+### Nuevos modulos
+
+- **Login headless (Playwright):** autenticacion en SPAs Angular/Vue/React y flujos OAuth2/PKCE. El tool intenta el login headless automaticamente cuando no detecta un formulario HTML; admite campos de email/usuario en dos pasos (Next/Siguiente), extrae cookies del navegador y las carga en la sesion requests. Si Playwright no esta instalado se ofrece instalarlo. Fallback al modo manual.
+- **SSRF:** payloads contra parametros URL (url, redirect, src, etc.) y cabeceras HTTP (X-Forwarded-For, X-Original-URL, Client-IP, Referer, Origin); detecta respuestas con marcadores de metadatos cloud (AWS IMDSv1, GCP, Alibaba); soporte OOB con URL de colaborador externo (Burp Collaborator, interactsh).
+- **SSTI:** deteccion por math probes ({{7*7}}, ${7*7}, #{7*7}, <%= 7*7 %>, etc.) para Jinja2, Twig, FreeMarker, ERB, Pebble, Tornado/Mako, Thymeleaf. Identifica el engine y detecta errores de template.
+- **XXE:** descubrimiento de endpoints XML/SOAP (xmlrpc.php, /soap, /api/xml, .asmx); inyeccion de entidades externas (file:///etc/passwd, /etc/hostname) y SSRF via DTD externo a metadatos cloud.
+- **CRLF Injection:** payloads %0d%0a y variantes unicode en path y parametros de redireccion; verifica cabeceras inyectadas sin seguir redirecciones.
+- **HTTP Request Smuggling:** usa smuggler.py si esta disponible; prueba manual CL.TE con socket raw (deteccion de 400 por conflicto CL/TE); instrucciones de instalacion si falta.
+- **Cache Poisoning:** inyecta X-Forwarded-Host, X-Host, X-Original-URL, X-Rewrite-URL, X-Forwarded-Server con valor aleatorio unico; confirma si el valor persiste en respuesta posterior sin la cabecera; detecta presencia de cache via X-Cache/Age/CF-Cache-Status.
+- **Nuevo menu opcion 10** para las pruebas avanzadas; opciones 10-17 renumeradas a 11-18.
+
+### Mejoras a modulos existentes
+
+- **JWT avanzado:** alg:none bypass activo (genera token modificado y comprueba si el servidor lo acepta), advertencia RS256->HS256 key confusion, deteccion de kid path traversal y kid SQLi, brute force de secreto HMAC con wordlist reducida (configurable), deteccion de token caducado aceptado.
+- **Rate limiting:** ademas de HTTP 429, detecta soft-block por latencia progresiva (factor 2.5x entre primeras y ultimas peticiones), captcha en respuesta, ban por IP (5+ respuestas 403 consecutivas).
+- Version bump a 1.3.0.
+
 ## Sin publicar - 2026-06-05
 
 - Validacion real de credenciales en Basic Auth: solo se da por valido si el servidor responde `401 WWW-Authenticate: Basic` y luego acepta las credenciales. Corrige un falso positivo en el que cualquier HTTP 200 (incluida la pagina de login tras redireccion) se reportaba como login exitoso.
