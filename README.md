@@ -172,14 +172,15 @@ Módulo dedicado (opción **14** del menú) que orquesta las herramientas están
 > **Herramientas recomendadas:** `kerbrute`, `ldap-utils`, `netexec`/`nxc` e `impacket-scripts`.
 
 ### 🔌 Testing de APIs (OWASP API Top 10)
-- **Descubrimiento de endpoints** (`/api`, `/swagger`, `/graphql`, `/actuator`, etc.) y parsing de OpenAPI
-- **IDOR / BOLA (API1)** – Modificación de IDs numéricos, UUID y parámetros
-- **JWT (API2)** – Detección, `alg:none` bypass activo, RS256→HS256 key confusion, `kid` path traversal/SQLi, brute force de secreto HMAC con wordlist, claims de privilegio, token caducado aceptado
+- **Descubrimiento de endpoints** (`/api`, `/swagger`, `/graphql`, `/actuator`, etc.) con fuzzing recursivo **multihilo** y parsing de OpenAPI (reporta documentación Swagger expuesta como API9)
+- **IDOR / BOLA (API1)** – Modificación de IDs numéricos, UUID y parámetros, con **sonda de control** que descarta endpoints que devuelven el mismo shell para cualquier id (anti falso positivo)
+- **JWT (API2)** – Detección en cabeceras, cookies de sesión, cuerpo de respuesta y endpoints descubiertos; `alg:none` bypass activo, RS256→HS256 key confusion, `kid` path traversal/SQLi, brute force de secreto HMAC con wordlist, claims de privilegio, token caducado aceptado
 - **Rate Limiting (API4)** – 429, soft-block por latencia progresiva, captcha, ban por IP (403 repetido)
-- **Auth Bypass (API5)** – Cabeceras `X-Original-URL`, `X-Forwarded-For`, etc.
-- **Mass Assignment (API6)** – Inyección de `is_admin`, `role`, `privilege`
+- **Auth Bypass (API5)** – Cabeceras `X-Original-URL`/`X-Rewrite-URL` apuntando al path real del endpoint, `X-Forwarded-For`, etc., con baseline que ignora páginas de login genéricas
+- **Mass Assignment (API6)** – Inyección de `is_admin`, `role`, `privilege` con **verificación de persistencia** vía re-GET del objeto
 - **Verbose Errors (API7)** – Detección de stack traces y rutas internas
 - **CORS / GraphQL (API8)** – Introspección habilitada, enumeración de users
+- Todos los hallazgos de API se integran en `FINDINGS` y aparecen en los reportes HTML/Markdown/TXT y en el resumen final
 
 ### 👥 Enumeración & Fuerza Bruta
 - **Enumeración de usuarios** – Desde APIs (`/api/users`, etc.) y formularios diferenciales
@@ -315,7 +316,7 @@ OWASP Web Security Testing Scanner
 developed by @afsh4ck
 
 ====================================================
-  WSTG SCANNER v1.3.2  [Sin autenticación]
+  WSTG SCANNER v1.3.3  [Sin autenticación]
 ====================================================
  1. Configurar autenticación (login / headless SPA / OAuth2)
  2. Información general y enumeración

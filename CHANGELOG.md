@@ -1,5 +1,18 @@
 # Registro de cambios
 
+## v1.3.3 — 2026-06-05
+
+### Mejoras al testing de APIs (OWASP API Top 10)
+
+- **Hallazgos de API en los reportes:** descubrimiento (Swagger expuesto), auth bypass, IDOR/BOLA, Mass Assignment, GraphQL y errores verbose ahora se registran en `FINDINGS` y aparecen en HTML/Markdown/TXT y en el resumen final. Antes solo se imprimian en consola y se perdian al cerrar.
+- **Fix de bug latente en reportes:** los hallazgos en formato dict (modulos SSRF/SSTI/XXE/CRLF/Smuggling/Cache/JWT/Rate) crasheaban el reporte TXT y el resumen final, que asumian cadenas. Nuevo normalizador `_finding_text` aplicado en los cuatro renders (HTML, Markdown, TXT, resumen); convierte dict y str al formato canonico `[CAT] nombre: detalle`.
+- **IDOR/BOLA con menos falsos positivos:** sonda de control con un id inexistente; si el endpoint devuelve el mismo contenido para cualquier id (shell/SPA) se descarta. Solo se reporta cuando el objeto alterno difiere de la representacion de "no existe". Eliminado el id invalido `../1`.
+- **Mass Assignment con verificacion de persistencia:** tras inyectar el campo privilegiado se hace re-GET del objeto y se confirma que el valor persistio (severidad alta). Si solo se refleja en la respuesta sin confirmar persistencia, se reporta como posible (media). Sustituye la heuristica anterior de buscar "success" en el body.
+- **Descubrimiento de endpoints multihilo:** el fuzzing recursivo prefijo x recurso se ejecuta con `ThreadPoolExecutor` (aprovecha el pool de conexiones de v1.3.2). Ganancia grande en objetivos con muchos prefijos.
+- **JWT con mas fuentes:** ademas de cabeceras y header Authorization, se buscan tokens en el jar de cookies de la sesion, en el cuerpo de la respuesta (SPAs) y en los endpoints de API descubiertos.
+- **Auth bypass mas preciso:** las cabeceras `X-Original-URL`/`X-Rewrite-URL` apuntan al path real del endpoint restringido; baseline que descarta paginas de login/SPA genericas para no marcar 200 inocuos.
+- **Limpieza:** eliminadas dos definiciones duplicadas y muertas (`test_jwt_tokens` y `test_api_rate_limiting`) que quedaban sombreadas por las versiones de v1.3.0.
+
 ## v1.3.2 — 2026-06-05
 
 ### Endurecimiento de la capa HTTP (afecta a todas las peticiones)

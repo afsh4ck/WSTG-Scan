@@ -132,7 +132,7 @@ BANNER = r"""
 """
 DESCRIPTION = "OWASP Web Security Testing Scanner"
 DEVELOPER = "developed by @afsh4ck"
-VERSION = "1.3.2"
+VERSION = "1.3.3"
 
 # ========== CONFIGURACIÓN ==========
 DEFAULT_TIMEOUT = 10
@@ -1389,6 +1389,20 @@ def _to_serializable(value):
 def _html_escape(value):
     return html.escape(str(value), quote=True)
 
+_FINDING_SEV_CAT = {"critical": "VULN", "high": "VULN", "medium": "VULN",
+                    "low": "API", "info": "INFO"}
+
+def _finding_text(finding):
+    """Normaliza un hallazgo (dict {name,detail,severity} o str legado '[CAT] msg')
+    a la cadena canonica '[CAT] nombre: detalle'. Evita el crash en reportes TXT y
+    en el resumen final cuando el hallazgo es un dict."""
+    if isinstance(finding, dict):
+        cat = _FINDING_SEV_CAT.get((finding.get("severity") or "").lower(), "API")
+        name = finding.get("name") or "Hallazgo"
+        detail = finding.get("detail") or ""
+        return f"[{cat}] {name}: {detail}" if detail else f"[{cat}] {name}"
+    return str(finding)
+
 def _build_html_report(report_data):
     """Genera un reporte HTML tipo dashboard SaaS con todos los datos recopilados."""
     scan_data = report_data.get("scan_data", {}) or {}
@@ -1644,9 +1658,10 @@ def _build_html_report(report_data):
 
     grouped = {}
     for item in findings:
-        m = re.match(r'^\[([^\]]+)\]\s*(.*)', str(item))
+        text = _finding_text(item)
+        m = re.match(r'^\[([^\]]+)\]\s*(.*)', text)
         key = m.group(1) if m else "OTROS"
-        msg = m.group(2) if m else str(item)
+        msg = m.group(2) if m else text
         grouped.setdefault(key, []).append(msg)
     finding_rows = [[cat, len(items), "<br>".join(esc(i) for i in items)] for cat, items in sorted(grouped.items())]
     findings_content = "<div class='panel'>" + table(["Categoria", "Total", "Detalle"], finding_rows, "Sin hallazgos.", raw_cols={2}) + "</div>"
@@ -2874,9 +2889,10 @@ def _build_markdown_report(report_data):
     if findings:
         cats = {}
         for f in findings:
-            m = re.match(r'^\[([^\]]+)\]', str(f))
+            text = _finding_text(f)
+            m = re.match(r'^\[([^\]]+)\]', text)
             cat = m.group(1) if m else "OTROS"
-            cats.setdefault(cat, []).append(str(f))
+            cats.setdefault(cat, []).append(text)
         parts.append(f"## Hallazgos clasificados (total: {len(findings)})")
         parts.append("")
         cat_rows = [[cat, str(len(cats[cat]))] for cat in sorted(cats.keys())]
@@ -2886,11 +2902,12 @@ def _build_markdown_report(report_data):
         parts.append("")
         rows = []
         for f in findings:
-            m = re.match(r'^\[([^\]]+)\]\s*(.*)', str(f))
+            text = _finding_text(f)
+            m = re.match(r'^\[([^\]]+)\]\s*(.*)', text)
             if m:
                 rows.append([m.group(1), m.group(2)])
             else:
-                rows.append(["OTROS", str(f)])
+                rows.append(["OTROS", text])
         parts.append(_md_table(["Categoría", "Detalle"], rows))
         parts.append("")
 
@@ -3173,7 +3190,7 @@ def save_report(output_file=None):
             f.write("[HALLAZGOS]\n")
             if FINDINGS:
                 for finding in FINDINGS:
-                    f.write(finding + "\n")
+                    f.write(_finding_text(finding) + "\n")
             else:
                 f.write("Sin hallazgos registrados.\n")
 
@@ -4565,6 +4582,11 @@ def discover_api_endpoints(target, session):
                 paths = list(doc.get('paths', {}).keys())
                 if paths:
                     print_info(f"  Rutas documentadas ({len(paths)}): {', '.join(paths[:12])}")
+                    FINDINGS.append({
+                        "name": "Documentacion OpenAPI/Swagger expuesta",
+                        "detail": f"{url} expone {len(paths)} rutas de API (OWASP API9).",
+                        "severity": "medium",
+                    })
                     for path in paths:
                         extra_url = urljoin(target, path)
                         if extra_url not in seen_urls:
@@ -4608,10 +4630,25 @@ def discover_api_endpoints(target, session):
             f"{len(prefixes_to_fuzz)} prefijos ({', '.join(prefixes_to_fuzz[:8])}"
             f"{', ...' if len(prefixes_to_fuzz) > 8 else ''})"
         )
+        # Lista deduplicada de endpoints a fuzzear (prefijo x recurso)
+        fuzz_endpoints = []
+        seen_fuzz = set()
         for prefix in prefixes_to_fuzz:
             for resource in API_RESOURCES:
                 endpoint = f"{prefix.rstrip('/')}/{resource}"
-                item = _probe(endpoint, depth_label="↳ ")
+                if endpoint in seen_fuzz:
+                    continue
+                seen_fuzz.add(endpoint)
+                fuzz_endpoints.append(endpoint)
+        # Probado en paralelo: cada endpoint es unico y _probe es seguro bajo el GIL
+        # para esta carga (set.add/list.append atomicos; la rama Swagger no aplica a recursos).
+        with ThreadPoolExecutor(max_workers=max(THREADS, 8)) as ex:
+            futures = [ex.submit(_probe, ep, "↳ ") for ep in fuzz_endpoints]
+            for fut in as_completed(futures):
+                try:
+                    item = fut.result()
+                except Exception:
+                    item = None
                 if item:
                     found.append(item)
 
@@ -4648,32 +4685,54 @@ def test_api_auth_bypass(found_endpoints, session):
     """OWASP API5/BFLA: Detecta endpoints restringidos accesibles sin autenticación."""
     try:
         unauth_session = get_session()
-        bypass_headers_list = [
-            {'X-Original-URL': '/admin'},
-            {'X-Rewrite-URL': '/admin'},
-            {'X-Custom-IP-Authorization': '127.0.0.1'},
-            {'X-Forwarded-For': '127.0.0.1'},
-            {'X-Remote-IP': '127.0.0.1'},
-            {'X-Client-IP': '127.0.0.1'},
-        ]
         restricted = [item for item in found_endpoints if item['status'] in (401, 403)]
         if not restricted:
             print_info("Sin endpoints restringidos encontrados para probar bypass.")
             return
+
+        def _looks_like_real_content(resp):
+            # Evita falsos positivos: un 200 con pagina de login/SPA generica no es bypass.
+            if resp.status_code != 200 or len(resp.content) <= 50:
+                return False
+            if _response_has_login_form(resp):
+                return False
+            return True
+
         for item in restricted:
             url = item['url']
+            path = urlparse(url).path or '/'
+            # Cabeceras cuyo valor debe apuntar al PATH del propio endpoint restringido
+            bypass_headers_list = [
+                {'X-Original-URL': path},
+                {'X-Rewrite-URL': path},
+                {'X-Custom-IP-Authorization': '127.0.0.1'},
+                {'X-Forwarded-For': '127.0.0.1'},
+                {'X-Remote-IP': '127.0.0.1'},
+                {'X-Client-IP': '127.0.0.1'},
+            ]
             try:
                 resp = unauth_session.get(url, timeout=DEFAULT_TIMEOUT)
-                if resp.status_code == 200 and len(resp.content) > 50:
+                if _looks_like_real_content(resp):
                     print_vuln(f"BFLA: accesible sin auth -> {url}")
+                    FINDINGS.append({
+                        "name": "BFLA / endpoint restringido sin auth",
+                        "detail": f"{url} devuelve 200 con contenido sin autenticacion (OWASP API5).",
+                        "severity": "high",
+                    })
                     continue
             except Exception:
                 pass
             for hdrs in bypass_headers_list:
                 try:
                     resp = unauth_session.get(url, timeout=DEFAULT_TIMEOUT, headers=hdrs)
-                    if resp.status_code == 200:
-                        print_vuln(f"Auth bypass con {list(hdrs.keys())[0]} en {url}")
+                    if _looks_like_real_content(resp):
+                        hdr_name = list(hdrs.keys())[0]
+                        print_vuln(f"Auth bypass con {hdr_name} en {url}")
+                        FINDINGS.append({
+                            "name": "Auth bypass por cabecera",
+                            "detail": f"{url} accesible con {hdr_name}: {list(hdrs.values())[0]} (OWASP API5).",
+                            "severity": "high",
+                        })
                         break
                 except Exception:
                     pass
@@ -4684,17 +4743,24 @@ def test_api_auth_bypass(found_endpoints, session):
 def test_api_idor(found_endpoints, session):
     """OWASP API1/BOLA: Prueba IDOR modificando IDs en rutas y query params."""
     try:
+        # (patron, grupo del id, id_inexistente_para_sonda_de_control)
         id_patterns = [
-            (r'((?:/[a-zA-Z_-]+)/)(\d{1,10})(/|$)', 2),
-            (r'([?&](?:id|user_id|uid|account_id|object_id)=)(\d+)', 2),
-            (r'((?:/[a-zA-Z_-]+)/)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', 2),
+            (r'((?:/[a-zA-Z_-]+)/)(\d{1,10})(/|$)', 2, '999999999999'),
+            (r'([?&](?:id|user_id|uid|account_id|object_id)=)(\d+)', 2, '999999999999'),
+            (r'((?:/[a-zA-Z_-]+)/)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', 2,
+             '00000000-0000-0000-0000-000000000000'),
         ]
-        alt_ids = ['0', '1', '2', '-1', '9999', '../1']
+        alt_ids = ['1', '2', '0', '3', '99999']
         tested = set()
         hits = 0
+
+        def _ratio(a, b):
+            m = max(a, b)
+            return abs(a - b) / m if m else 0.0
+
         for item in found_endpoints:
             url = item['url']
-            for pattern, group in id_patterns:
+            for pattern, group, bogus in id_patterns:
                 match = re.search(pattern, url)
                 if not match:
                     continue
@@ -4708,6 +4774,22 @@ def test_api_idor(found_endpoints, session):
                     base_len = len(base_resp.content)
                 except Exception:
                     continue
+                if base_len <= 50:
+                    continue
+                # Sonda de control con un id inexistente. Si devuelve 200 con
+                # tamano casi identico al base, el endpoint NO discrimina por id
+                # (devuelve siempre el mismo shell/SPA) -> cualquier 200 seria
+                # falso positivo, se salta el endpoint.
+                control_200 = False
+                control_len = 0
+                try:
+                    cresp = session.get(prefix + bogus + suffix, timeout=DEFAULT_TIMEOUT)
+                    control_200 = cresp.status_code == 200
+                    control_len = len(cresp.content)
+                except Exception:
+                    pass
+                if control_200 and _ratio(control_len, base_len) < 0.1:
+                    continue
                 for alt in alt_ids:
                     if alt == original_id:
                         continue
@@ -4717,22 +4799,53 @@ def test_api_idor(found_endpoints, session):
                     tested.add(test_url)
                     try:
                         resp = session.get(test_url, timeout=DEFAULT_TIMEOUT)
-                        if resp.status_code == 200 and base_len > 0:
-                            diff_ratio = abs(len(resp.content) - base_len) / base_len
-                            if diff_ratio < 0.4:
-                                print_vuln(f"IDOR: {url} -> ID={alt} devuelve {resp.status_code} "
-                                           f"({len(resp.content)}B, ratio_diff={diff_ratio:.2f})")
-                                hits += 1
                     except Exception:
-                        pass
+                        continue
+                    if resp.status_code != 200 or len(resp.content) <= 50:
+                        continue
+                    alt_len = len(resp.content)
+                    # Si el control respondio 200 (representacion de "no existe"),
+                    # exigir que el objeto alterno difiera de esa representacion.
+                    if control_200 and _ratio(alt_len, control_len) < 0.15:
+                        continue
+                    # Objeto distinto del base => acceso a otro recurso (BOLA).
+                    detail = (f"{url} -> ID={alt} devuelve 200 ({alt_len}B, "
+                              f"base={base_len}B). El endpoint discrimina por id y "
+                              f"expone otro objeto sin control de propiedad (OWASP API1).")
+                    print_vuln(f"IDOR/BOLA: {detail}")
+                    FINDINGS.append({"name": "IDOR / BOLA", "detail": detail, "severity": "high"})
+                    hits += 1
         if hits == 0:
             print_info("Sin evidencias claras de IDOR en los endpoints encontrados.")
     except Exception as e:
         print_error(f"Error en test IDOR: {e}")
 
 
+def _safe_json(resp):
+    try:
+        return resp.json()
+    except Exception:
+        return None
+
+def _json_field_matches(obj, key, value, depth=0):
+    """Busca recursivamente key==value (comparacion laxa de tipos) en un JSON."""
+    if depth > 6:
+        return False
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if str(k).lower() == str(key).lower():
+                if str(v).strip().lower() == str(value).strip().lower():
+                    return True
+            if _json_field_matches(v, key, value, depth + 1):
+                return True
+    elif isinstance(obj, list):
+        for it in obj[:50]:
+            if _json_field_matches(it, key, value, depth + 1):
+                return True
+    return False
+
 def test_api_mass_assignment(found_endpoints, session):
-    """OWASP API6: Inyecta campos privilegiados en endpoints que aceptan JSON."""
+    """OWASP API6: Inyecta campos privilegiados y confirma persistencia con re-GET."""
     try:
         targets = [item for item in found_endpoints
                    if item['status'] in (200, 201, 0)
@@ -4744,19 +4857,45 @@ def test_api_mass_assignment(found_endpoints, session):
         method_map = [('POST', 'post'), ('PUT', 'put'), ('PATCH', 'patch')]
         for item in targets:
             url = item['url']
+            confirmed = False
             for fields in MASS_ASSIGNMENT_FIELDS[:6]:
+                if confirmed:
+                    break
+                key = next(iter(fields.keys()))
+                value = fields[key]
                 for method_name, method_attr in method_map:
                     try:
                         method = getattr(session, method_attr)
                         resp = method(url, json=fields, timeout=DEFAULT_TIMEOUT)
-                        if resp.status_code in (200, 201, 202, 204):
-                            key = list(fields.keys())[0]
-                            resp_lower = resp.text.lower()
-                            if key in resp_lower or 'admin' in resp_lower or 'success' in resp_lower:
-                                print_vuln(f"Mass Assignment en {url} [{method_name}] con {fields}")
-                                break
                     except Exception:
-                        pass
+                        continue
+                    if resp.status_code not in (200, 201, 202, 204):
+                        continue
+                    # Confirmacion fuerte: re-GET y comprobar que el campo privilegiado persistio.
+                    persisted = False
+                    try:
+                        verify = session.get(url, timeout=DEFAULT_TIMEOUT)
+                        if 'json' in verify.headers.get('Content-Type', '').lower():
+                            persisted = _json_field_matches(verify.json(), key, value)
+                    except Exception:
+                        persisted = False
+                    if persisted:
+                        detail = (f"{url} [{method_name}] acepto y persistio el campo "
+                                  f"privilegiado {key}={value} (OWASP API6).")
+                        print_vuln(f"Mass Assignment confirmado: {detail}")
+                        FINDINGS.append({"name": "Mass Assignment", "detail": detail,
+                                         "severity": "high"})
+                        confirmed = True
+                        break
+                    # Confirmacion debil: la respuesta refleja el campo con el valor inyectado.
+                    if _json_field_matches(_safe_json(resp), key, value):
+                        detail = (f"{url} [{method_name}] refleja {key}={value} en la respuesta "
+                                  f"(posible Mass Assignment, sin confirmar persistencia).")
+                        print_warning(detail)
+                        FINDINGS.append({"name": "Mass Assignment (posible)", "detail": detail,
+                                         "severity": "medium"})
+                        confirmed = True
+                        break
     except Exception as e:
         print_error(f"Error en test Mass Assignment: {e}")
 
@@ -4783,6 +4922,12 @@ def test_graphql(target, session):
                     types = [t['name'] for t in data['data']['__schema']['types']
                              if not t['name'].startswith('__')]
                     print_info(f"  Tipos expuestos ({len(types)}): {', '.join(types[:15])}")
+                    FINDINGS.append({
+                        "name": "GraphQL introspeccion habilitada",
+                        "detail": f"{gql_url} expone el schema completo via introspeccion "
+                                  f"({len(types)} tipos) (OWASP API8).",
+                        "severity": "medium",
+                    })
                 elif 'errors' not in data:
                     found_any = True
                     print_warning(f"GraphQL activo (introspección deshabilitada): {gql_url}")
@@ -4794,6 +4939,12 @@ def test_graphql(target, session):
                         d2 = r2.json()
                         if 'data' in d2 and d2['data'] and 'users' in str(d2['data']):
                             print_vuln(f"GraphQL expone listado de usuarios en {gql_url}")
+                            FINDINGS.append({
+                                "name": "GraphQL expone usuarios",
+                                "detail": f"{gql_url} permite enumerar usuarios via query GraphQL "
+                                          f"(OWASP API8/API3).",
+                                "severity": "high",
+                            })
                     except Exception:
                         pass
                     break
@@ -4826,8 +4977,15 @@ def test_api_verbose_errors(found_endpoints, session):
                     resp = session.get(test_url, timeout=DEFAULT_TIMEOUT)
                     if resp.status_code in (500, 503):
                         for pat in sensitive_patterns:
-                            if pat.search(resp.text):
+                            m = pat.search(resp.text)
+                            if m:
                                 print_vuln(f"Error verbose [{resp.status_code}]: {test_url}")
+                                FINDINGS.append({
+                                    "name": "Error verbose / fuga de info interna",
+                                    "detail": f"{test_url} [{resp.status_code}] revela detalle interno "
+                                              f"('{m.group(0)[:40]}') (OWASP API7).",
+                                    "severity": "medium",
+                                })
                                 hits += 1
                                 break
                 except Exception:
@@ -4836,82 +4994,6 @@ def test_api_verbose_errors(found_endpoints, session):
             print_info("Sin errores verbose detectados en los endpoints probados.")
     except Exception as e:
         print_error(f"Error en test verbose errors: {e}")
-
-
-def test_api_rate_limiting(target, session):
-    """OWASP API4: Verifica si existe rate limiting en endpoints de autenticación."""
-    try:
-        candidates = [
-            urljoin(target, '/api/v1/login'),
-            urljoin(target, '/api/login'),
-            urljoin(target, '/api/auth'),
-            urljoin(target, '/login'),
-        ]
-        for test_url in candidates:
-            statuses = []
-            for _ in range(20):
-                try:
-                    resp = session.post(test_url,
-                                        json={'username': 'test', 'password': 'test'},
-                                        timeout=DEFAULT_TIMEOUT)
-                    statuses.append(resp.status_code)
-                    if resp.status_code == 429:
-                        break
-                except Exception:
-                    break
-            if not statuses:
-                continue
-            if 429 in statuses:
-                print_good(f"Rate limiting activo (HTTP 429) en {test_url}")
-            elif all(s not in (429, 503) for s in statuses):
-                print_warning(f"Sin rate limiting: {len(statuses)} requests sin bloqueo en {test_url}")
-            break
-    except Exception as e:
-        print_error(f"Error en test rate limiting: {e}")
-
-
-def test_jwt_tokens(target, session):
-    """OWASP API2: Detecta JWT en cabeceras/cookies y analiza algoritmo y campos."""
-    try:
-        resp = session.get(target, timeout=DEFAULT_TIMEOUT)
-        jwt_regex = re.compile(r'eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*')
-        jwt_candidates = set()
-        for header_val in resp.headers.values():
-            jwt_candidates.update(jwt_regex.findall(header_val))
-        for cookie in resp.cookies:
-            jwt_candidates.update(jwt_regex.findall(cookie.value))
-        if not jwt_candidates:
-            print_info("Sin JWT detectados en cabeceras/cookies de la página principal.")
-            return
-        for jwt in jwt_candidates:
-            try:
-                parts = jwt.split('.')
-                if len(parts) < 3:
-                    continue
-                def _b64_decode(s):
-                    s += '=' * (4 - len(s) % 4)
-                    return json.loads(base64.urlsafe_b64decode(s).decode('utf-8', errors='ignore'))
-                header_data = _b64_decode(parts[0])
-                payload_data = _b64_decode(parts[1])
-                alg = header_data.get('alg', '').upper()
-                print_info(f"JWT detectado — alg: {alg}  kid: {header_data.get('kid', 'N/A')}")
-                if alg in ('NONE', ''):
-                    print_vuln("JWT con alg:none — firma ignorada completamente")
-                elif alg in ('HS256', 'HS384', 'HS512'):
-                    print_warning(f"JWT HMAC ({alg}) — revisar secreto débil manualmente")
-                sensitive_keys = {'admin', 'role', 'is_admin', 'permission', 'privilege', 'scope'}
-                exposed = [k for k in payload_data if k.lower() in sensitive_keys]
-                if exposed:
-                    print_warning(f"  JWT contiene campos de privilegio: {exposed}")
-                    for k in exposed:
-                        print_info(f"    {k} = {payload_data[k]}")
-                exp = payload_data.get('exp')
-                if exp and exp < time.time():
-                    print_warning("  JWT caducado todavía aceptado por el servidor")
-            except Exception:
-                pass
-    except Exception as e:
-        print_error(f"Error en test JWT: {e}")
 
 
 
@@ -8308,9 +8390,26 @@ def test_jwt_tokens(target, session):
         auth_header = _session_header_value(session, "Authorization")
         if auth_header:
             jwt_candidates.update(jwt_regex.findall(auth_header))
+        # Cookies persistentes del jar de la sesion (token guardado tras login).
+        for cookie in session.cookies:
+            jwt_candidates.update(jwt_regex.findall(cookie.value or ""))
+        # Cuerpo de la respuesta: las SPAs embeben el token en el HTML/JS.
+        jwt_candidates.update(jwt_regex.findall(resp.text or ""))
+        # Respuestas de los endpoints de API descubiertos (cabeceras y cuerpo).
+        for ep in (SCAN_DATA.get("api_endpoints") or [])[:15]:
+            eurl = ep.get("url") if isinstance(ep, dict) else None
+            if not eurl:
+                continue
+            try:
+                er = session.get(eurl, timeout=DEFAULT_TIMEOUT)
+                for hv in er.headers.values():
+                    jwt_candidates.update(jwt_regex.findall(hv))
+                jwt_candidates.update(jwt_regex.findall(er.text or ""))
+            except Exception:
+                pass
 
         if not jwt_candidates:
-            print_info("Sin JWT detectados en cabeceras/cookies de la pagina principal.")
+            print_info("Sin JWT detectados en cabeceras, cookies, cuerpo ni endpoints de API.")
             return
 
         for jwt in jwt_candidates:
@@ -9433,9 +9532,10 @@ def print_final_summary(target):
     if FINDINGS:
         cats = {}
         for f in FINDINGS:
-            m = re.match(r'^\[([^\]]+)\]', f)
+            text = _finding_text(f)
+            m = re.match(r'^\[([^\]]+)\]', text)
             cat = m.group(1) if m else "OTROS"
-            cats.setdefault(cat, []).append(f)
+            cats.setdefault(cat, []).append(text)
         cat_rows = []
         for cat in sorted(cats.keys()):
             cat_rows.append([cat, str(len(cats[cat]))])
@@ -9447,12 +9547,13 @@ def print_final_summary(target):
         )
         find_rows = []
         for f in FINDINGS[:40]:
-            m = re.match(r'^\[([^\]]+)\]\s*(.*)', f)
+            text = _finding_text(f)
+            m = re.match(r'^\[([^\]]+)\]\s*(.*)', text)
             if m:
                 cat = m.group(1)
                 msg = m.group(2)
             else:
-                cat, msg = "OTROS", f
+                cat, msg = "OTROS", text
             color = Fore.RED if cat.startswith(("VULN", "NUCLEI:CRITICAL", "NUCLEI:HIGH", "CRED", "WP:VULN")) else (
                 Fore.YELLOW if cat.startswith(("NUCLEI:MEDIUM", "DIR", "VHOST", "WP")) else Fore.CYAN
             )
