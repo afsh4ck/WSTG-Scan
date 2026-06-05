@@ -278,7 +278,9 @@ python3 wstg-scan.py --url https://example.com --output report.html --threads 10
 
 | Argumento | Descripción |
 |---|---|
-| `--url, -u` | URL objetivo (omitir para modo interactivo) |
+| `--url, -u` | URL objetivo. Repetible y admite varias separadas por comas (`-u a.com,b.com -u c.com`) |
+| `--list, -L` | Fichero con una URL por línea (admite `#` comentarios). Repetible |
+| `--batch` | No interactivo: pentest completo en cada objetivo y un reporte por objetivo. Requiere `-u`/`-L` |
 | `--output, -o` | Ruta base del reporte (genera TXT/JSON/HTML) |
 | `--threads, -t` | Número de hilos (default: 5) |
 | `--timeout` | Timeout por request en segundos (default: 10) |
@@ -286,6 +288,21 @@ python3 wstg-scan.py --url https://example.com --output report.html --threads 10
 | `--insecure, -k` | Desactiva la verificación TLS (uso en labs / certificados auto-firmados) |
 | `--no-color` | Desactiva colores ANSI |
 | `--version, -V` | Versión del scanner |
+
+### Múltiples objetivos
+
+```bash
+# Interactivo: la opción que elijas se ejecuta en TODOS los objetivos, con estado por objetivo
+python3 wstg-scan.py -u https://a.com -u https://b.com
+python3 wstg-scan.py -L targets.txt
+
+# Batch no interactivo: pentest completo por objetivo + un reporte por objetivo + resumen global
+python3 wstg-scan.py -L targets.txt --batch
+```
+
+- Las fuentes `-u` (repetible/coma) y `-L` (ficheros) se combinan y deduplican.
+- Cada objetivo mantiene su propio `SCAN_DATA`/`FINDINGS`; los reportes se guardan en `reports/<host>/`.
+- En batch, el módulo Active Directory se omite (no interactivo); el resto del pentest se ejecuta completo.
 
 ### Pre-autenticación
 
@@ -316,7 +333,7 @@ OWASP Web Security Testing Scanner
 developed by @afsh4ck
 
 ====================================================
-  WSTG SCANNER v1.3.3  [Sin autenticación]
+  WSTG SCANNER v1.4.0  [Sin autenticación]
 ====================================================
  1. Configurar autenticación (login / headless SPA / OAuth2)
  2. Información general y enumeración

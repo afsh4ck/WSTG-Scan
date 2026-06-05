@@ -132,7 +132,7 @@ BANNER = r"""
 """
 DESCRIPTION = "OWASP Web Security Testing Scanner"
 DEVELOPER = "developed by @afsh4ck"
-VERSION = "1.3.3"
+VERSION = "1.4.0"
 
 # ========== CONFIGURACIÓN ==========
 DEFAULT_TIMEOUT = 10
@@ -147,27 +147,32 @@ REQUEST_DELAY = 0.0  # Delay entre requests (segundos)
 OUTPUT_FILE = None   # Ruta del archivo de reporte
 VERIFY_TLS = True    # Verificación TLS (desactivable con --insecure)
 FINDINGS = []        # Hallazgos acumulados para el reporte
-SCAN_DATA = {
-    "general": {},
-    "authentication": {},
-    "robots_paths": [],
-    "http_methods": [],
-    "nmap": {},
-    "active_directory": {},
-    "vhosts": [],
-    "directory_hits": [],
-    "injection": {},
-    "api_endpoints": [],
-    "users": [],
-    "emails": [],
-    "bruteforce_credentials": [],
-    "wordpress_detection": {},
-    "wordpress": {},
-    "spider": {},
-    "source_code_analysis": {},
-    "advanced_security": {},
-    "stats": {},
-}
+
+def _fresh_scan_data():
+    """Estructura vacia de SCAN_DATA. Usada al inicio y al cambiar de objetivo."""
+    return {
+        "general": {},
+        "authentication": {},
+        "robots_paths": [],
+        "http_methods": [],
+        "nmap": {},
+        "active_directory": {},
+        "vhosts": [],
+        "directory_hits": [],
+        "injection": {},
+        "api_endpoints": [],
+        "users": [],
+        "emails": [],
+        "bruteforce_credentials": [],
+        "wordpress_detection": {},
+        "wordpress": {},
+        "spider": {},
+        "source_code_analysis": {},
+        "advanced_security": {},
+        "stats": {},
+    }
+
+SCAN_DATA = _fresh_scan_data()
 
 COMMON_DIRS = [
     "admin", "backup", "cgi-bin", "css", "js", "images", "uploads", "download",
@@ -8705,7 +8710,7 @@ def _has_scan_data():
         bool(SCAN_DATA.get("advanced_security")),
     ])
 
-def show_menu():
+def show_menu(targets=None):
     clear_screen()
     if HAS_COLOR:
         print(Fore.CYAN + BANNER + Style.RESET_ALL)
@@ -8720,6 +8725,12 @@ def show_menu():
     print("=" * 52)
     print(f"  WSTG SCANNER v{VERSION}  {auth_status}")
     print("=" * 52)
+    if targets and len(targets) > 1:
+        print(f"{Fore.CYAN}  Modo multi-objetivo: cada opción se ejecuta en los "
+              f"{len(targets)} objetivos{Style.RESET_ALL}")
+        for i, t in enumerate(targets, 1):
+            print(f"    {i}. {t}")
+        print("=" * 52)
     print(" 1. Configurar autenticación (login / headless SPA / OAuth2)")
     print(" 2. Información general y enumeración")
     print(" 3. Escaneo de puertos con Nmap (-sV + NSE dirigido)")
@@ -9569,7 +9580,7 @@ def print_final_summary(target):
     print_good("Recopilación finalizada. Use 'Guardar reporte' al salir para exportar TXT/JSON/HTML/MD.")
 
 
-def run_full_pentest(target, session):
+def run_full_pentest(target, session, interactive_ad=True):
     print_phase("INICIANDO PENTESTING COMPLETO")
     # Orden según menú principal:
     run_information_gathering(target, session)         # 2
@@ -9589,14 +9600,266 @@ def run_full_pentest(target, session):
     run_api_tests(target, session)                     # 11
     run_user_enum_bruteforce(target, session)          # 12
     run_wordpress_attacks_if_detected(target, session) # 13
-    try:
-        run_ad = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Ejecutar modulo Active Directory? [s/N]: ").strip().lower() == 's'
-    except (KeyboardInterrupt, EOFError):
+    if interactive_ad:
+        try:
+            run_ad = input(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Ejecutar modulo Active Directory? [s/N]: ").strip().lower() == 's'
+        except (KeyboardInterrupt, EOFError):
+            run_ad = False
+    else:
         run_ad = False
     if run_ad:
         safe_execute(run_active_directory_pentest, target)  # 13
     print_good("Pentesting completo finalizado.")
     print_final_summary(target)
+
+# ========== MULTI-OBJETIVO ==========
+
+def _read_target_file(path):
+    out = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                out.append(line)
+    except Exception as e:
+        print_error(f"No se pudo leer la lista '{path}': {e}")
+    return out
+
+def _collect_targets(args):
+    """Reune objetivos de -u (repetible / separado por comas) y -L/--list (ficheros).
+    Normaliza y deduplica conservando el orden."""
+    raw = []
+    for u in (args.url or []):
+        raw.extend(p.strip() for p in u.split(",") if p.strip())
+    for path in (args.list or []):
+        raw.extend(_read_target_file(path))
+    targets, seen = [], set()
+    for t in raw:
+        norm = normalize_url(t)
+        if norm and norm not in seen:
+            seen.add(norm)
+            targets.append(norm)
+    return targets
+
+def _reset_scan_state():
+    """Estado limpio para empezar un objetivo desde cero."""
+    global SCAN_DATA, AUTHENTICATED, AUTH_SESSION
+    FINDINGS.clear()
+    SCAN_DATA = _fresh_scan_data()
+    AUTHENTICATED = False
+    AUTH_SESSION = None
+
+def _snapshot_state():
+    return {
+        "scan_data": SCAN_DATA,
+        "findings": list(FINDINGS),
+        "authenticated": AUTHENTICATED,
+        "auth_session": AUTH_SESSION,
+        "target": TARGET_URL,
+    }
+
+def _restore_state(snap):
+    global SCAN_DATA, AUTHENTICATED, AUTH_SESSION, TARGET_URL
+    SCAN_DATA = snap["scan_data"]
+    FINDINGS.clear()
+    FINDINGS.extend(snap["findings"])
+    AUTHENTICATED = snap["authenticated"]
+    AUTH_SESSION = snap["auth_session"]
+    TARGET_URL = snap["target"]
+
+def _print_markdown_block(target):
+    report_data = {
+        "tool": VERSION,
+        "target": target,
+        "date": time.strftime('%Y-%m-%d %H:%M:%S'),
+        "findings": list(FINDINGS),
+        "scan_data": _to_serializable(SCAN_DATA),
+    }
+    md = _build_markdown_report(report_data)
+    print()
+    print("=" * 70)
+    print(" RESUMEN EN MARKDOWN (copia desde la línea siguiente):")
+    print("=" * 70)
+    print(md)
+    print("=" * 70)
+    print_good("Fin del markdown. Copia el bloque anterior.")
+
+def _dispatch_scan_option(option, target, session):
+    """Ejecuta una opcion de modulo (1-15) contra 'target'. Devuelve la sesion
+    (posiblemente nueva tras autenticar) si la opcion era de modulo, o None si no."""
+    global AUTHENTICATED, AUTH_SESSION
+    if option == '1':
+        setup_authentication()
+        if AUTHENTICATED:
+            print_good("Sesión autenticada activa para futuras pruebas.")
+            return AUTH_SESSION
+        print_warning("No se pudo autenticar. Continuando sin autenticación.")
+        return session
+    handlers = {
+        '2': lambda: run_information_gathering(target, session),
+        '3': lambda: run_nmap_scan(target, session),
+        '4': lambda: run_nuclei_scan(target, session),
+        '5': lambda: run_vhost_fuzzing(target, session),
+        '6': lambda: run_directory_fuzzing(target, session),
+        '7': lambda: run_spider(target, session),
+        '8': lambda: run_source_code_analysis(target, session),
+        '9': lambda: run_injection_tests(target, session),
+        '10': lambda: run_advanced_security_tests(target, session),
+        '11': lambda: run_api_tests(target, session),
+        '12': lambda: run_user_enum_bruteforce(target, session),
+        '13': lambda: run_wordpress_attacks(target, session),
+        '14': lambda: run_active_directory_pentest(target),
+        '15': lambda: run_full_pentest(target, session),
+    }
+    fn = handlers.get(option)
+    if fn is None:
+        return None
+    fn()
+    return session
+
+def _print_batch_summary(summary):
+    if not summary:
+        return
+    rows = [[(t[:60]), str(n), st] for (t, n, st) in summary]
+    print_table(
+        headers=["Objetivo", "Hallazgos", "Estado"],
+        rows=rows,
+        alignments=['<', '>', '<'],
+        title=f"Resumen batch ({len(summary)} objetivos):",
+        border_color=Fore.CYAN,
+    )
+
+def run_batch_targets(targets):
+    """No interactivo: pentest completo por objetivo, reporte por objetivo y resumen final."""
+    global TARGET_URL
+    print_phase(f"MODO BATCH: {len(targets)} objetivos (pentest completo por objetivo)")
+    summary = []
+    for i, t in enumerate(targets, 1):
+        print_phase(f"[{i}/{len(targets)}] {t}")
+        _reset_scan_state()
+        TARGET_URL = t
+        session = get_session()
+        status = "ok"
+        try:
+            run_full_pentest(t, session, interactive_ad=False)
+        except KeyboardInterrupt:
+            status = "interrumpido"
+            print_warning(f"Objetivo {t} interrumpido.")
+            try:
+                if input("¿Continuar con el siguiente objetivo? [S/n]: ").strip().lower() == 'n':
+                    summary.append((t, len(FINDINGS), status))
+                    break
+            except (KeyboardInterrupt, EOFError):
+                summary.append((t, len(FINDINGS), status))
+                break
+        except Exception as e:
+            status = "error"
+            print_error(f"Error en {t}: {e}")
+        try:
+            save_report(OUTPUT_FILE)
+        except Exception as e:
+            print_error(f"No se pudo guardar el reporte de {t}: {e}")
+        summary.append((t, len(FINDINGS), status))
+    print_phase("RESUMEN GLOBAL DEL BATCH")
+    _print_batch_summary(summary)
+    print("\n" + Fore.GREEN + "Happy Hacking :)" + Style.RESET_ALL)
+
+def run_multi_interactive(targets):
+    """Menú interactivo: cada opción seleccionada se ejecuta en TODOS los objetivos,
+    manteniendo el estado (SCAN_DATA/FINDINGS) por objetivo entre módulos."""
+    global TARGET_URL
+    states, sessions = {}, {}
+    for t in targets:
+        _reset_scan_state()
+        TARGET_URL = t
+        states[t] = _snapshot_state()
+        sessions[t] = get_session()
+
+    def _save_all():
+        saved = 0
+        for t in targets:
+            _restore_state(states[t])
+            if _has_scan_data():
+                try:
+                    save_report(OUTPUT_FILE)
+                    saved += 1
+                except Exception as e:
+                    print_error(f"Reporte {t}: {e}")
+        return saved
+
+    def _exit_multi():
+        print()
+        if any((states[t]["findings"] or _state_has_data(states[t])) for t in targets):
+            auto = OUTPUT_FILE is not None
+            if not auto:
+                try:
+                    auto = input("\n¿Guardar un reporte por objetivo? [S/n]: ").strip().lower() != 'n'
+                except (KeyboardInterrupt, EOFError):
+                    auto = False
+            if auto:
+                n = _save_all()
+                print_good(f"Reportes guardados: {n}")
+        print("\n" + Fore.GREEN + "Happy Hacking :)" + Style.RESET_ALL)
+        sys.exit(0)
+
+    def _state_has_data(snap):
+        _restore_state(snap)
+        return _has_scan_data()
+
+    while True:
+        try:
+            show_menu(targets=targets)
+            option = input("Selecciona una opción (se aplica a TODOS los objetivos): ").strip()
+        except (KeyboardInterrupt, EOFError):
+            try:
+                print()
+                if input("\n¿Salir del programa? [S/n]: ").strip().lower() != 'n':
+                    _exit_multi()
+            except (KeyboardInterrupt, EOFError):
+                _exit_multi()
+            continue
+
+        try:
+            if option == '18':
+                _exit_multi()
+            elif option in ('16', '17'):
+                for t in targets:
+                    _restore_state(states[t])
+                    print_phase(f"{'MARKDOWN' if option == '16' else 'RESUMEN'}: {t}")
+                    if not _has_scan_data():
+                        print_warning("Sin datos para este objetivo todavía.")
+                    elif option == '16':
+                        _print_markdown_block(t)
+                    else:
+                        print_final_summary(t)
+                    states[t] = _snapshot_state()
+            elif option in {str(n) for n in range(1, 16)}:
+                for t in targets:
+                    _restore_state(states[t])
+                    print_phase(f"OBJETIVO: {t}")
+                    sess = _dispatch_scan_option(option, t, sessions[t])
+                    if sess is not None:
+                        sessions[t] = sess
+                    states[t] = _snapshot_state()
+            else:
+                print_error("Opción no válida. Intenta de nuevo.")
+        except KeyboardInterrupt:
+            try:
+                print()
+                if input("\n¿Salir del programa? [S/n]: ").strip().lower() != 'n':
+                    _exit_multi()
+            except (KeyboardInterrupt, EOFError):
+                _exit_multi()
+            continue
+        except Exception as e:
+            print_error(f"Error inesperado: {e}")
+
+        try:
+            input("\nPresiona Enter para continuar...")
+        except (KeyboardInterrupt, EOFError):
+            _exit_multi()
 
 def main():
     global TARGET_URL, AUTHENTICATED, AUTH_SESSION, THREADS, DEFAULT_TIMEOUT, REQUEST_DELAY, OUTPUT_FILE, VERIFY_TLS
@@ -9604,10 +9867,19 @@ def main():
     parser = argparse.ArgumentParser(
         description=f"WSTG Scanner v{VERSION} - OWASP Web Security Testing Scanner",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Ejemplo: python3 wstg-scan.py --url https://example.com --output report.txt"
+        epilog=("Ejemplos:\n"
+                "  python3 wstg-scan.py -u https://example.com -o report.txt\n"
+                "  python3 wstg-scan.py -u a.com,b.com -u c.com   (multi-objetivo interactivo)\n"
+                "  python3 wstg-scan.py -L targets.txt --batch     (pentest completo por objetivo)")
     )
-    parser.add_argument('--url', '-u', metavar='URL',
-                        help='URL objetivo (omitir para modo interactivo)')
+    parser.add_argument('--url', '-u', action='append', metavar='URL',
+                        help='URL objetivo. Repetible y admite varias separadas por comas. '
+                             'Omitir para modo interactivo.')
+    parser.add_argument('--list', '-L', action='append', metavar='FILE',
+                        help='Fichero con una URL por línea (admite # comentarios). Repetible.')
+    parser.add_argument('--batch', action='store_true',
+                        help='No interactivo: ejecuta el pentest completo en cada objetivo y '
+                             'guarda un reporte por objetivo. Requiere -u/-L.')
     parser.add_argument('--output', '-o', metavar='FILE',
                         help='Archivo de salida para el reporte (ej: report.txt)')
     parser.add_argument('--threads', '-t', type=int, default=THREADS, metavar='N',
@@ -9646,8 +9918,25 @@ def main():
     if not VERIFY_TLS:
         print_warning("Verificación TLS desactivada (--insecure). Solo para entornos de prueba.")
 
-    if args.url:
-        TARGET_URL = normalize_url(args.url)
+    targets = _collect_targets(args)
+
+    # Modo batch: requiere objetivos y no es interactivo.
+    if args.batch:
+        if not targets:
+            print_error("El modo --batch requiere al menos un objetivo (-u/-L).")
+            sys.exit(1)
+        run_batch_targets(targets)
+        return
+
+    # Varios objetivos: menú interactivo aplicado a todos.
+    if len(targets) > 1:
+        print_info(f"{len(targets)} objetivos cargados. Cada opción se ejecutará en todos.")
+        run_multi_interactive(targets)
+        return
+
+    # Un solo objetivo (o ninguno: se pide por consola).
+    if targets:
+        TARGET_URL = targets[0]
         print_info(f"Objetivo: {TARGET_URL}")
     else:
         TARGET_URL = input("Introduce la URL objetivo: ").strip()

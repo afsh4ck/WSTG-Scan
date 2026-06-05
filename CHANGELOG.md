@@ -1,5 +1,15 @@
 # Registro de cambios
 
+## v1.4.0 — 2026-06-05
+
+### Soporte multi-objetivo
+
+- **Lista de objetivos:** ademas de `-u` (ahora repetible y con varias URLs separadas por comas) se anade `-L/--list` para cargar ficheros con una URL por linea (admite comentarios `#` y lineas vacias). Las fuentes se combinan y deduplican normalizando la URL.
+- **Modo batch (`--batch`):** no interactivo. Ejecuta el pentest completo en cada objetivo, guarda un reporte por objetivo en `reports/<host>/` y muestra un resumen global con hallazgos por objetivo. El modulo Active Directory se omite en batch. Requiere `-u`/`-L`.
+- **Modo multi-objetivo interactivo:** al pasar mas de un objetivo sin `--batch`, el menu muestra la lista y cada opcion seleccionada se ejecuta secuencialmente en todos los objetivos. Cada objetivo mantiene su propio estado (`SCAN_DATA`/`FINDINGS`) entre modulos, de modo que se pueden encadenar varias pruebas y al salir se guarda un reporte por objetivo.
+- **Estado por objetivo:** nueva factoria `_fresh_scan_data()` y helpers de reset/snapshot/restore para aislar el estado global entre objetivos sin reescribir los modulos existentes.
+- **Compatibilidad:** el flujo de un solo objetivo (interactivo) permanece igual; `run_full_pentest` acepta `interactive_ad` para poder omitir el prompt de Active Directory en batch.
+
 ## v1.3.3 — 2026-06-05
 
 ### Mejoras al testing de APIs (OWASP API Top 10)
