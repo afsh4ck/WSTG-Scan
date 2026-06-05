@@ -70,6 +70,11 @@ Diseñada para bug bounty hunters y pentesters, automatiza tareas comunes de rec
 
 ### 🔐 Autenticación
 - **Pre-autenticación** – Login automático con credenciales (Basic Auth o formulario)
+- **Validación real de credenciales** – Basic Auth solo se da por bueno si el servidor envía el desafío `401 WWW-Authenticate: Basic` y luego acepta las credenciales; en formularios se detectan mensajes de fallo (ES/EN) y se rechaza si la respuesta sigue mostrando el campo de contraseña (sin falsos positivos)
+- **Login con usuario o email** – Un solo campo identificador; detecta el tipo por `@` y rellena el campo de formulario correcto (`user`/`login` o `email`/`correo`)
+- **User-Agent personalizado** – Aplicable tanto al login con credenciales como al modo manual
+- **Modo manual de sesión** – Carga cookie/token, cabecera `Authorization` y cabeceras extra; valida la sesión reaccediendo al objetivo antes de confiar en ella
+- **Verificación post-login** – Tras autenticar, confirma que la sesión persiste (detecta redirecciones/CSRF que invalidan el login)
 - **Sesión persistente** – Todas las pruebas posteriores usan la sesión autenticada
 - Manejo de cookies y campos hidden (CSRF tokens)
 
@@ -277,9 +282,13 @@ python3 wstg-scan.py --url https://example.com --output report.html --threads 10
 ```bash
 python3 wstg-scan.py
 # Menú → 1. Configurar autenticación (login)
-# Introduce usuario, contraseña y URL de login
-# Las siguientes pruebas usarán la sesión autenticada
+# (Opcional) User-Agent personalizado
+# Modo credenciales: URL de login + usuario o email + contraseña
+#   o Modo manual: pega cookie/token de sesión y cabeceras
+# Se valida la sesión; las siguientes pruebas usarán la sesión autenticada
 ```
+
+> **SPA / OAuth2 (SSO):** si el login se renderiza en JavaScript (Angular/Vue/React) o usa OAuth2/PKCE, el login por formulario HTTP no aplica. Usa el **modo manual**: inicia sesión en el navegador, copia la cookie de sesión completa y pégala en la opción 1.
 
 ---
 

@@ -3209,15 +3209,43 @@ def _record_auth_context(method, login_url, username, session, response=None, no
         "notes": notes or [],
     }
 
+LOGIN_FAILURE_MARKERS = (
+    "invalid credentials", "incorrect password", "incorrect username",
+    "wrong password", "wrong username", "bad credentials",
+    "login failed", "authentication failed", "access denied",
+    "usuario o contraseña", "contraseña incorrecta", "contrasena incorrecta",
+    "credenciales invalidas", "credenciales inválidas",
+    "credenciales incorrectas", "datos incorrectos", "acceso denegado",
+    "try again", "intenta de nuevo", "inténtalo de nuevo", "intentalo de nuevo",
+)
+
+def _response_shows_login_failure(response):
+    if response is None:
+        return False
+    body = (response.text or "").lower()[:8000]
+    return any(marker in body for marker in LOGIN_FAILURE_MARKERS)
+
+def _response_has_login_form(response):
+    if response is None:
+        return False
+    body = (response.text or "").lower()
+    return 'type="password"' in body or "type='password'" in body
+
 def _looks_authenticated_response(response, login_url, username=""):
     if response is None or response.status_code >= 400:
+        return False
+    if _response_shows_login_failure(response):
         return False
     body = (response.text or "").lower()
     final_path = urlparse(getattr(response, "url", "") or "").path.rstrip("/")
     login_path = urlparse(login_url or "").path.rstrip("/")
-    success_markers = ("logout", "sign out", "dashboard", "welcome", "my account", "profile")
+    success_markers = ("logout", "sign out", "cerrar sesion", "cerrar sesión",
+                       "dashboard", "welcome", "bienvenido", "my account", "mi cuenta", "profile")
     if any(marker in body for marker in success_markers):
         return True
+    # Si sigue mostrando un formulario de login, no estamos autenticados.
+    if _response_has_login_form(response):
+        return False
     if username and username.lower() in body:
         return True
     if final_path and login_path and final_path != login_path and "password" not in body[:5000]:
@@ -3225,6 +3253,14 @@ def _looks_authenticated_response(response, login_url, username=""):
     if response.history and "password" not in body[:5000]:
         return True
     return False
+
+def _verify_authenticated_session(session, identifier=""):
+    """Reaccede a la URL objetivo con la sesion para confirmar que sigue autenticada."""
+    try:
+        resp = session.get(TARGET_URL, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
+    except requests.RequestException:
+        return None
+    return resp
 
 def check_seclists():
     if os.path.exists(SECLISTS_SMALL):
@@ -3253,12 +3289,96 @@ def check_seclists():
         return None
 
 # ========== FUNCIONES DE AUTENTICACIÓN ==========
+def _prompt_user_agent():
+    print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} User-Agent personalizado (vacio = por defecto):")
+    return input("> ").strip() or None
+
+def _attempt_basic_auth(login_url, username, password, user_agent):
+    """Verifica Basic Auth de forma fiable: sondea sin credenciales, luego con ellas.
+    Devuelve ('valid'|'invalid'|'not-used', session|None, response|None)."""
+    session = get_session(user_agent)
+    try:
+        probe = session.get(login_url, timeout=DEFAULT_TIMEOUT)
+    except requests.RequestException as e:
+        print_warning(f"No se pudo sondear Basic Auth ({type(e).__name__}).")
+        return "not-used", None, None
+    challenge = probe.headers.get("WWW-Authenticate", "").lower()
+    if probe.status_code != 401 or "basic" not in challenge:
+        return "not-used", None, None
+    try:
+        resp = session.get(login_url, auth=(username, password), timeout=DEFAULT_TIMEOUT)
+    except requests.RequestException as e:
+        print_warning(f"Error en Basic Auth ({type(e).__name__}).")
+        return "not-used", None, None
+    if resp.status_code == 200:
+        session.auth = (username, password)  # persistir credenciales en la sesion
+        return "valid", session, resp
+    return "invalid", None, resp
+
+def _attempt_form_login(login_url, identifier, password, is_email, user_agent):
+    """Detecta el formulario de login y prueba las credenciales.
+    Devuelve ('valid'|'invalid'|'no-form', session|None, response|None, form_url)."""
+    session = get_session(user_agent)
+    if not HAS_BS4:
+        print_warning("BeautifulSoup no disponible: no se puede analizar el formulario de login.")
+        return "no-form", None, None, login_url
+    try:
+        resp = session.get(login_url, timeout=DEFAULT_TIMEOUT)
+    except requests.RequestException as e:
+        print_error(f"No se pudo cargar la URL de login ({type(e).__name__}).")
+        return "no-form", None, None, login_url
+    soup = BeautifulSoup(resp.text, 'html.parser')
+    for form in soup.find_all('form'):
+        action = form.get('action')
+        inputs = form.find_all(['input', 'textarea'])
+        user_field = email_field = pass_field = None
+        for inp in inputs:
+            name = (inp.get('name') or '').lower()
+            itype = (inp.get('type') or '').lower()
+            if not name:
+                continue
+            if itype == 'password' or 'pass' in name:
+                pass_field = inp.get('name')
+            elif itype == 'email' or 'email' in name or 'correo' in name:
+                email_field = inp.get('name')
+            elif 'user' in name or 'login' in name or name in ('uname', 'identifier', 'account', 'usuario'):
+                user_field = inp.get('name')
+        # Elegir el campo identificador segun usuario o email.
+        if is_email:
+            ident_field = email_field or user_field
+        else:
+            ident_field = user_field or email_field
+        if not (ident_field and pass_field):
+            continue
+        form_url = urljoin(login_url, action) if action else login_url
+        data = {ident_field: identifier, pass_field: password}
+        for inp in inputs:
+            iname = inp.get('name')
+            itype = (inp.get('type') or '').lower()
+            if not iname or iname in (ident_field, pass_field):
+                continue
+            if itype == 'hidden':
+                data[iname] = inp.get('value', '')
+            elif itype in ('submit', 'button') and inp.get('value'):
+                data.setdefault(iname, inp.get('value', ''))
+        try:
+            resp2 = session.post(form_url, data=data, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
+        except requests.RequestException as e:
+            print_error(f"Error al enviar el formulario ({type(e).__name__}).")
+            continue
+        if _looks_authenticated_response(resp2, login_url, identifier):
+            return "valid", session, resp2, form_url
+        return "invalid", None, resp2, form_url
+    return "no-form", None, None, login_url
+
 def setup_authentication():
     global AUTHENTICATED, AUTH_SESSION, TARGET_URL
+    user_agent = _prompt_user_agent()
+
     print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Usar cookie/token de sesion ya obtenido manualmente? [s/N]:")
     manual_mode = input("> ").strip().lower() == 's'
     if manual_mode:
-        temp_session = get_session()
+        temp_session = get_session(user_agent)
         print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Cookie completa (ej: PHPSESSID=...; csrftoken=...):")
         cookie_string = input("> ").strip()
         if cookie_string:
@@ -3278,84 +3398,69 @@ def setup_authentication():
             name, value = extra.split(":", 1)
             if name.strip() and value.strip():
                 temp_session.headers[name.strip()] = value.strip()
-        try:
-            resp = temp_session.get(TARGET_URL, timeout=DEFAULT_TIMEOUT)
+        resp = _verify_authenticated_session(temp_session)
+        if resp is not None and _looks_authenticated_response(resp, TARGET_URL):
             AUTH_SESSION = temp_session
             AUTHENTICATED = True
             _record_auth_context("manual-session", TARGET_URL, "", temp_session, response=resp)
-            print_good("Sesion manual cargada. Las herramientas compatibles usaran cookies/cabeceras.")
+            print_good("Sesion manual validada. Las herramientas compatibles usaran cookies/cabeceras.")
             return
-        except Exception as e:
-            AUTH_SESSION = temp_session
-            AUTHENTICATED = True
-            _record_auth_context("manual-session", TARGET_URL, "", temp_session, notes=[str(e)])
-            print_warning("No se pudo validar la sesion manual, pero quedo cargada para futuras pruebas.")
-            return
+        AUTH_SESSION = temp_session
+        AUTHENTICATED = True
+        note = "no se pudo confirmar autenticacion (posible login page)" if resp is not None else "sin respuesta del objetivo"
+        _record_auth_context("manual-session", TARGET_URL, "", temp_session, response=resp, notes=[note])
+        print_warning(f"Sesion manual cargada, pero {note}.")
+        return
+
     print_info("Configuración de autenticación")
     print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} URL de login (dejar vacío si es la misma que la objetivo):")
     login_url = input("> ").strip()
-    if not login_url:
-        login_url = TARGET_URL
-    else:
-        login_url = normalize_url(login_url)
-    print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Usuario:")
-    username = input("> ")
+    login_url = normalize_url(login_url) if login_url else TARGET_URL
+    print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Usuario o email:")
+    identifier = input("> ").strip()
+    is_email = "@" in identifier
+    print_info(f"Identificador detectado como {'email' if is_email else 'usuario'}.")
     print(f"{Fore.YELLOW}[?]{Style.RESET_ALL} Contraseña:")
     password = getpass.getpass("> ")
 
-    temp_session = get_session()
-    try:
-        resp = temp_session.get(login_url, auth=(username, password), timeout=DEFAULT_TIMEOUT)
-        if resp.status_code == 200:
-            print_good("Autenticación Basic Auth exitosa")
-            AUTH_SESSION = temp_session
-            AUTHENTICATED = True
-            _record_auth_context("basic-auth", login_url, username, temp_session, response=resp)
-            return
-    except requests.RequestException as e:
-        print_warning(f"Basic Auth no aplicable ({type(e).__name__}). Probando formularios...")
+    def _finish_fail():
+        global AUTHENTICATED, AUTH_SESSION
+        print_warning("No se pudo autenticar. Las pruebas se realizarán sin autenticación.")
+        AUTHENTICATED = False
+        AUTH_SESSION = None
+        SCAN_DATA["authentication"] = {"authenticated": False}
 
-    try:
-        resp = temp_session.get(login_url, timeout=DEFAULT_TIMEOUT)
-        if HAS_BS4:
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            forms = soup.find_all('form')
-            for form in forms:
-                action = form.get('action')
-                method = form.get('method', 'get').upper()
-                inputs = form.find_all(['input', 'textarea'])
-                user_field = None
-                pass_field = None
-                for inp in inputs:
-                    name = inp.get('name', '').lower()
-                    if 'user' in name or 'email' in name or 'login' in name:
-                        user_field = inp.get('name')
-                    if 'pass' in name:
-                        pass_field = inp.get('name')
-                if user_field and pass_field and method == 'POST':
-                    form_url = urljoin(login_url, action) if action else login_url
-                    data = {user_field: username, pass_field: password}
-                    for inp in inputs:
-                        if inp.get('type') == 'hidden' and inp.get('name'):
-                            data[inp.get('name')] = inp.get('value', '')
-                        elif inp.get('type') in ('submit', 'button') and inp.get('name') and inp.get('value'):
-                            data.setdefault(inp.get('name'), inp.get('value', ''))
-                    resp2 = temp_session.post(form_url, data=data, timeout=DEFAULT_TIMEOUT, allow_redirects=True)
-                    if _looks_authenticated_response(resp2, login_url, username):
-                        print_good("Autenticación exitosa mediante formulario")
-                        AUTH_SESSION = temp_session
-                        AUTHENTICATED = True
-                        _record_auth_context("form-login", form_url, username, temp_session, response=resp2)
-                        return
-                    else:
-                        print_error("Falló la autenticación con el formulario detectado.")
-    except Exception as e:
-        print_error(f"Error durante autenticación: {e}")
-    
-    print_warning("No se pudo autenticar. Las pruebas se realizarán sin autenticación.")
-    AUTHENTICATED = False
-    AUTH_SESSION = None
-    SCAN_DATA["authentication"] = {"authenticated": False}
+    # 1. Basic Auth (solo si el servidor lo solicita).
+    status, session, resp = _attempt_basic_auth(login_url, identifier, password, user_agent)
+    if status == "valid":
+        print_good("Credenciales válidas (Basic Auth).")
+        AUTH_SESSION = session
+        AUTHENTICATED = True
+        _record_auth_context("basic-auth", login_url, identifier, session, response=resp)
+        return
+    if status == "invalid":
+        print_error(f"Credenciales inválidas en Basic Auth (HTTP {resp.status_code}).")
+        _finish_fail()
+        return
+
+    # 2. Login por formulario.
+    status, session, resp, form_url = _attempt_form_login(login_url, identifier, password, is_email, user_agent)
+    if status == "valid":
+        verify = _verify_authenticated_session(session, identifier)
+        if verify is not None and _response_has_login_form(verify):
+            print_warning("El formulario respondió como válido, pero la sesión no persiste (posible CSRF/redirección).")
+            _finish_fail()
+            return
+        print_good("Credenciales válidas. Sesión autenticada verificada.")
+        AUTH_SESSION = session
+        AUTHENTICATED = True
+        _record_auth_context("form-login", form_url, identifier, session, response=resp)
+        return
+    if status == "invalid":
+        print_error("Credenciales inválidas: el formulario rechazó usuario/contraseña.")
+    else:
+        print_warning("No se detectó un formulario de login válido en la URL indicada.")
+    _finish_fail()
 
 def get_active_session():
     global AUTH_SESSION, AUTHENTICATED
