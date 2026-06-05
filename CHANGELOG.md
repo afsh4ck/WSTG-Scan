@@ -1,5 +1,13 @@
 # Registro de cambios
 
+## v1.3.2 — 2026-06-05
+
+### Endurecimiento de la capa HTTP (afecta a todas las peticiones)
+
+- **Reintentos de red:** la sesion monta un HTTPAdapter con reintentos ante errores de conexion/lectura transitorios (connect/read = 2, backoff 0.3). No reintenta por codigo de estado (`status=0`), de modo que 429 y 5xx siguen llegando intactos a los modulos de rate-limit y deteccion de errores. Reduce falsos negativos, especialmente en la fuerza bruta de login (un corte transitorio ya no se cuenta como credencial fallida).
+- **Pool de conexiones:** pool elevado a 50 conexiones por host. Antes urllib3 limitaba a 10, estrangulando los modulos con hilos (vhost, directorios, fuerza bruta); ahora la concurrencia real no tiene cuello de botella.
+- **--delay global:** el retardo entre peticiones se aplica ahora a TODAS las peticiones de la sesion mediante un hook de respuesta, no solo a los tres modulos con hilos. Fuente unica de verdad; eliminados los `time.sleep` locales redundantes. Mejora la evasion de WAF/rate-limit en objetivos autorizados.
+
 ## v1.3.1 — 2026-06-05
 
 ### Reportes y tablas visuales para modulos avanzados

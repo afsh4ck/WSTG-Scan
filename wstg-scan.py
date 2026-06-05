@@ -66,7 +66,12 @@ else:
             return input(prompt_text)
 
 import requests
+from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
+try:
+    from urllib3.util.retry import Retry
+except ImportError:  # urllib3 < 1.26 empaquetado dentro de requests
+    from requests.packages.urllib3.util.retry import Retry
 
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
@@ -127,12 +132,14 @@ BANNER = r"""
 """
 DESCRIPTION = "OWASP Web Security Testing Scanner"
 DEVELOPER = "developed by @afsh4ck"
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 
 # ========== CONFIGURACIÓN ==========
 DEFAULT_TIMEOUT = 10
 MAX_REDIRECTS = 10
 THREADS = 5
+HTTP_RETRIES = 2          # Reintentos ante errores de red transitorios (no de estado HTTP)
+HTTP_POOL_SIZE = 50       # Conexiones por host reutilizables (dimensionado para modulos con hilos)
 AUTHENTICATED = False
 AUTH_SESSION = None
 TARGET_URL = ""
@@ -3234,6 +3241,25 @@ def normalize_url(url):
         url = 'http://' + url
     return url.rstrip('/')
 
+def _throttle_hook(response, *args, **kwargs):
+    """Aplica REQUEST_DELAY a TODA peticion de la sesion (no solo a los modulos
+    con hilos). Fuente unica de verdad para --delay."""
+    if REQUEST_DELAY > 0:
+        time.sleep(REQUEST_DELAY)
+    return response
+
+def _build_retry():
+    """Reintenta solo errores de red transitorios (connect/read), nunca por codigo
+    de estado, para no enmascarar 429/5xx que los modulos de deteccion analizan."""
+    try:
+        return Retry(
+            total=HTTP_RETRIES, connect=HTTP_RETRIES, read=HTTP_RETRIES,
+            status=0, backoff_factor=0.3,
+            raise_on_status=False, respect_retry_after_header=False,
+        )
+    except TypeError:  # urllib3 antiguo sin algunos kwargs
+        return Retry(total=HTTP_RETRIES, backoff_factor=0.3)
+
 def get_session(user_agent=None):
     session = requests.Session()
     session.headers.update({
@@ -3244,6 +3270,14 @@ def get_session(user_agent=None):
     })
     session.verify = VERIFY_TLS
     session.max_redirects = MAX_REDIRECTS
+    adapter = HTTPAdapter(
+        max_retries=_build_retry(),
+        pool_connections=HTTP_POOL_SIZE,
+        pool_maxsize=HTTP_POOL_SIZE,
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    session.hooks["response"].append(_throttle_hook)
     return session
 
 def _apply_cookie_string_to_session(session, cookie_string, target_url=None):
@@ -3923,8 +3957,6 @@ def vhost_bruteforce(target, session, base_domain, wordlist=None, threads=THREAD
         def test_sub(sub):
             fqdn = f"{sub}.{base_domain}"
             try:
-                if REQUEST_DELAY > 0:
-                    time.sleep(REQUEST_DELAY)
                 r = session.get(target, headers={"Host": fqdn},
                                 timeout=DEFAULT_TIMEOUT, allow_redirects=False)
                 cl = r.headers.get('Content-Length')
@@ -4128,8 +4160,6 @@ def dir_bruteforce(target, session, wordlist=None, threads=THREADS, use_ffuf=Tru
             def test_path(path):
                 url = urljoin(target, path)
                 try:
-                    if REQUEST_DELAY > 0:
-                        time.sleep(REQUEST_DELAY)
                     resp = session.get(url, timeout=DEFAULT_TIMEOUT)
                     if resp.status_code < 400:
                         return (url, resp.status_code, len(resp.content))
@@ -5386,8 +5416,6 @@ def bruteforce_login(target, session, usernames, passlist, max_threads=5):
 
         def try_cred(user, pwd):
             try:
-                if REQUEST_DELAY > 0:
-                    time.sleep(REQUEST_DELAY)
                 payload = _build_payload(user, pwd)
                 resp_no_redirect = session.post(
                     primary_form['url'],

@@ -281,7 +281,7 @@ python3 wstg-scan.py --url https://example.com --output report.html --threads 10
 | `--output, -o` | Ruta base del reporte (genera TXT/JSON/HTML) |
 | `--threads, -t` | Número de hilos (default: 5) |
 | `--timeout` | Timeout por request en segundos (default: 10) |
-| `--delay, -d` | Delay entre requests para evasión (default: 0) |
+| `--delay, -d` | Delay entre requests para evasión, aplicado a TODAS las peticiones de la sesión (default: 0) |
 | `--insecure, -k` | Desactiva la verificación TLS (uso en labs / certificados auto-firmados) |
 | `--no-color` | Desactiva colores ANSI |
 | `--version, -V` | Versión del scanner |
@@ -315,7 +315,7 @@ OWASP Web Security Testing Scanner
 developed by @afsh4ck
 
 ====================================================
-  WSTG SCANNER v1.3.1  [Sin autenticación]
+  WSTG SCANNER v1.3.2  [Sin autenticación]
 ====================================================
  1. Configurar autenticación (login / headless SPA / OAuth2)
  2. Información general y enumeración
