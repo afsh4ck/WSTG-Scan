@@ -315,7 +315,7 @@ OWASP Web Security Testing Scanner
 developed by @afsh4ck
 
 ====================================================
-  WSTG SCANNER v1.3.0  [Sin autenticación]
+  WSTG SCANNER v1.3.1  [Sin autenticación]
 ====================================================
  1. Configurar autenticación (login / headless SPA / OAuth2)
  2. Información general y enumeración

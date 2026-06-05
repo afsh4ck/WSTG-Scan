@@ -127,7 +127,7 @@ BANNER = r"""
 """
 DESCRIPTION = "OWASP Web Security Testing Scanner"
 DEVELOPER = "developed by @afsh4ck"
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 
 # ========== CONFIGURACIÓN ==========
 DEFAULT_TIMEOUT = 10
@@ -1409,6 +1409,14 @@ def _build_html_report(report_data):
     robots_paths = scan_data.get("robots_paths", []) or []
     http_methods = scan_data.get("http_methods", []) or []
     injection = scan_data.get("injection", {}) or {}
+    adv_sec = scan_data.get("advanced_security", {}) or {}
+    adv_ssrf = adv_sec.get("ssrf") or []
+    adv_ssti = adv_sec.get("ssti") or []
+    adv_xxe = adv_sec.get("xxe") or []
+    adv_crlf = adv_sec.get("crlf") or []
+    adv_smuggling = adv_sec.get("smuggling") or []
+    adv_cache = adv_sec.get("cache_poisoning") or []
+    adv_total = len(adv_ssrf) + len(adv_ssti) + len(adv_xxe) + len(adv_crlf) + len(adv_smuggling) + len(adv_cache)
 
     def esc(value):
         return _html_escape(value if value is not None else "")
@@ -1518,6 +1526,7 @@ def _build_html_report(report_data):
         ("AD usuarios", len(ad_ldap.get("users") or []), "info", "tree-structure", "ad"),
         ("AS-REP", len(asrep_hashes), "bad" if asrep_hashes else "neutral", "fingerprint", "ad"),
         ("Kerberoast", len(kerberoast_hashes), "bad" if kerberoast_hashes else "neutral", "fire", "ad"),
+        ("Adv. Security", adv_total, "bad" if adv_total else "neutral", "shield-warning", "advanced"),
     ]
     # Ordenar el resumen por criticidad: critico/alto -> medio -> info -> ok
     tone_rank = {"bad": 0, "warn": 1, "info": 2, "good": 3, "neutral": 4}
@@ -1798,6 +1807,47 @@ def _build_html_report(report_data):
         + "</div>"
     )
 
+    adv_ssrf_rows = [[
+        r.get("type", "ssrf"), r.get("param") or r.get("header") or "-",
+        (r.get("payload") or r.get("value") or "")[:80], str(r.get("status", "-")),
+    ] for r in adv_ssrf]
+    adv_ssti_rows = [[r.get("url", "-")[:80], r.get("param", "-"), r.get("engine", "-")] for r in adv_ssti]
+    adv_xxe_rows = [[r.get("url", "-")[:80], r.get("content_type", "-"), r.get("note", "confirmado")] for r in adv_xxe]
+    adv_crlf_rows = [[r.get("vector", "-"), (r.get("param") or r.get("url") or "-")[:60], r.get("payload", "-")[:50]] for r in adv_crlf]
+    adv_smuggling_rows = [[(r.get("tool") or r.get("type") or "-"), (r.get("note") or r.get("output_snippet") or "-")[:80]] for r in adv_smuggling]
+    adv_cache_rows = [[r.get("header", "-"), r.get("value", "-")[:50], "Confirmado" if r.get("confirmed") else "Reflejado"] for r in adv_cache]
+    adv_summary_rows = [
+        ["SSRF", str(len(adv_ssrf))],
+        ["SSTI", str(len(adv_ssti))],
+        ["XXE", str(len(adv_xxe))],
+        ["CRLF", str(len(adv_crlf))],
+        ["HTTP Smuggling", str(len(adv_smuggling))],
+        ["Cache Poisoning", str(len(adv_cache))],
+    ]
+    adv_content = (
+        "<div class='panel'><h3>Resumen</h3>"
+        + table(["Modulo", "Hallazgos"], adv_summary_rows, "Sin pruebas avanzadas ejecutadas.")
+        + "</div>"
+        + "<div class='panel'><h3>SSRF</h3>"
+        + table(["Tipo", "Vector", "Payload/Valor", "HTTP"], adv_ssrf_rows, "Sin hallazgos SSRF.")
+        + "</div>"
+        + "<div class='panel'><h3>SSTI</h3>"
+        + table(["URL", "Parametro", "Engine"], adv_ssti_rows, "Sin hallazgos SSTI.")
+        + "</div>"
+        + "<div class='panel'><h3>XXE</h3>"
+        + table(["URL", "Content-Type", "Estado"], adv_xxe_rows, "Sin hallazgos XXE.")
+        + "</div>"
+        + "<div class='panel'><h3>CRLF Injection</h3>"
+        + table(["Vector", "URL/Param", "Payload"], adv_crlf_rows, "Sin hallazgos CRLF.")
+        + "</div>"
+        + "<div class='panel'><h3>HTTP Request Smuggling</h3>"
+        + table(["Herramienta/Tipo", "Detalle"], adv_smuggling_rows, "Sin hallazgos Smuggling.")
+        + "</div>"
+        + "<div class='panel'><h3>Cache Poisoning</h3>"
+        + table(["Cabecera", "Valor inyectado", "Estado"], adv_cache_rows, "Sin hallazgos Cache Poisoning.")
+        + "</div>"
+    )
+
     raw_content = (
         "<div class='panel'><h3>Estadisticas</h3><pre>"
         + esc(json.dumps(stats, indent=2, ensure_ascii=False))
@@ -1817,6 +1867,7 @@ def _build_html_report(report_data):
         "vhosts": bool(vhosts),
         "directorios": bool(directories),
         "exposicion": bool(robots_paths or http_methods or inj_get or inj_forms),
+        "advanced": bool(adv_sec),
         "wordpress": bool(wordpress),
         "spider": bool(spider.get("total_urls") or spider.get("sample_urls")),
         "codigo": bool(src_code.get("pages_analyzed") or src_findings),
@@ -1834,6 +1885,7 @@ def _build_html_report(report_data):
         ("vhosts", "VHosts", vhost_content, len(vhosts)),
         ("directorios", "Directorios", dir_content, len(directories)),
         ("exposicion", "Superficie expuesta", exposure_content, len(robots_paths) + len(http_methods)),
+        ("advanced", "Pruebas Avanzadas", adv_content, adv_total),
         ("wordpress", "WordPress", wp_content, len(wordpress.get("vulnerabilities") or [])),
         ("spider", "Spidering", spider_content, spider.get("total_urls", 0)),
         ("codigo", "Codigo Fuente", source_content, len(src_findings)),
@@ -1846,7 +1898,7 @@ def _build_html_report(report_data):
     SEC_ICON = {
         "resumen": "gauge", "info": "info", "nmap": "network", "hallazgos": "warning-octagon",
         "nuclei": "bug-beetle", "api": "brackets-curly", "vhosts": "globe-hemisphere-west",
-        "directorios": "folders", "exposicion": "eye", "wordpress": "wordpress-logo",
+        "directorios": "folders", "exposicion": "eye", "advanced": "shield-warning", "wordpress": "wordpress-logo",
         "spider": "share-network", "codigo": "code", "ad": "tree-structure",
         "credenciales": "key", "raw": "database",
     }
@@ -2697,6 +2749,68 @@ def _build_markdown_report(report_data):
         parts.append(_md_table(["Categoría", "Valores"], ue_rows))
         parts.append("")
 
+    # 9b. Pruebas avanzadas (SSRF/SSTI/XXE/CRLF/Smuggling/Cache)
+    adv_sec_md = scan_data.get("advanced_security") or {}
+    if adv_sec_md:
+        adv_md_ssrf = adv_sec_md.get("ssrf") or []
+        adv_md_ssti = adv_sec_md.get("ssti") or []
+        adv_md_xxe = adv_sec_md.get("xxe") or []
+        adv_md_crlf = adv_sec_md.get("crlf") or []
+        adv_md_smuggling = adv_sec_md.get("smuggling") or []
+        adv_md_cache = adv_sec_md.get("cache_poisoning") or []
+        parts.append("## Pruebas Avanzadas de Seguridad")
+        parts.append("")
+        parts.append(_md_table(["Modulo", "Hallazgos"], [
+            ["SSRF", str(len(adv_md_ssrf))],
+            ["SSTI", str(len(adv_md_ssti))],
+            ["XXE", str(len(adv_md_xxe))],
+            ["CRLF", str(len(adv_md_crlf))],
+            ["HTTP Request Smuggling", str(len(adv_md_smuggling))],
+            ["Cache Poisoning", str(len(adv_md_cache))],
+        ]))
+        parts.append("")
+        if adv_md_ssrf:
+            parts.append(f"### SSRF ({len(adv_md_ssrf)})")
+            parts.append("")
+            parts.append(_md_table(["Tipo", "Vector", "Payload/Valor", "HTTP"],
+                [[r.get("type","ssrf"), r.get("param") or r.get("header") or "-",
+                  (r.get("payload") or r.get("value") or "")[:80], str(r.get("status","-"))]
+                 for r in adv_md_ssrf]))
+            parts.append("")
+        if adv_md_ssti:
+            parts.append(f"### SSTI ({len(adv_md_ssti)})")
+            parts.append("")
+            parts.append(_md_table(["URL", "Parametro", "Engine"],
+                [[r.get("url","-")[:80], r.get("param","-"), r.get("engine","-")] for r in adv_md_ssti]))
+            parts.append("")
+        if adv_md_xxe:
+            parts.append(f"### XXE ({len(adv_md_xxe)})")
+            parts.append("")
+            parts.append(_md_table(["URL", "Content-Type", "Estado"],
+                [[r.get("url","-")[:80], r.get("content_type","-"), r.get("note","confirmado")] for r in adv_md_xxe]))
+            parts.append("")
+        if adv_md_crlf:
+            parts.append(f"### CRLF Injection ({len(adv_md_crlf)})")
+            parts.append("")
+            parts.append(_md_table(["Vector", "URL/Param", "Payload"],
+                [[r.get("vector","-"), (r.get("param") or r.get("url") or "-")[:60], r.get("payload","-")[:50]]
+                 for r in adv_md_crlf]))
+            parts.append("")
+        if adv_md_smuggling:
+            parts.append(f"### HTTP Request Smuggling ({len(adv_md_smuggling)})")
+            parts.append("")
+            parts.append(_md_table(["Herramienta/Tipo", "Detalle"],
+                [[(r.get("tool") or r.get("type") or "-"), (r.get("note") or r.get("output_snippet") or "-")[:100]]
+                 for r in adv_md_smuggling]))
+            parts.append("")
+        if adv_md_cache:
+            parts.append(f"### Cache Poisoning ({len(adv_md_cache)})")
+            parts.append("")
+            parts.append(_md_table(["Cabecera", "Valor inyectado", "Estado"],
+                [[r.get("header","-"), r.get("value","-")[:50], "Confirmado" if r.get("confirmed") else "Reflejado"]
+                 for r in adv_md_cache]))
+            parts.append("")
+
     # 9. Inyección
     if injection.get("executed"):
         parts.append("## Pruebas de inyección")
@@ -2815,6 +2929,12 @@ def save_report(output_file=None):
         "active_directory_credentials": len((((SCAN_DATA.get("active_directory") or {}).get("nxc") or {}).get("bruteforce") or {}).get("credentials", [])),
         "active_directory_asrep_hashes": len((((SCAN_DATA.get("active_directory") or {}).get("impacket") or {}).get("asrep_roast") or {}).get("hashes", [])),
         "active_directory_kerberoast_hashes": len((((SCAN_DATA.get("active_directory") or {}).get("impacket") or {}).get("kerberoast") or {}).get("hashes", [])),
+        "adv_ssrf_hits": len((SCAN_DATA.get("advanced_security") or {}).get("ssrf") or []),
+        "adv_ssti_hits": len((SCAN_DATA.get("advanced_security") or {}).get("ssti") or []),
+        "adv_xxe_hits": len((SCAN_DATA.get("advanced_security") or {}).get("xxe") or []),
+        "adv_crlf_hits": len((SCAN_DATA.get("advanced_security") or {}).get("crlf") or []),
+        "adv_smuggling_hits": len((SCAN_DATA.get("advanced_security") or {}).get("smuggling") or []),
+        "adv_cache_hits": len((SCAN_DATA.get("advanced_security") or {}).get("cache_poisoning") or []),
     }
     SCAN_DATA["stats"] = scan_stats
 
@@ -3015,6 +3135,30 @@ def save_report(output_file=None):
                 f.write(f"- Credenciales NXC: {len(ad_creds)}\n")
                 for cred in ad_creds:
                     f.write(f"  * {cred.get('username')}:{cred.get('password')}\n")
+            else:
+                f.write("- No ejecutado\n")
+            f.write("\n")
+
+            adv_sec_txt = report_data['scan_data'].get('advanced_security') or {}
+            f.write("[PRUEBAS AVANZADAS DE SEGURIDAD]\n")
+            if adv_sec_txt:
+                for module in ["ssrf", "ssti", "xxe", "crlf", "smuggling", "cache_poisoning"]:
+                    hits = adv_sec_txt.get(module) or []
+                    f.write(f"- {module.upper()}: {len(hits)} hallazgo(s)\n")
+                    for r in hits:
+                        if module == "ssrf":
+                            f.write(f"  * [{r.get('type','ssrf')}] vector={r.get('param') or r.get('header','')} payload={str(r.get('payload') or r.get('value',''))[:60]}\n")
+                        elif module == "ssti":
+                            f.write(f"  * url={r.get('url','')} param={r.get('param','')} engine={r.get('engine','')}\n")
+                        elif module == "xxe":
+                            f.write(f"  * url={r.get('url','')} content-type={r.get('content_type','')} estado={r.get('note','confirmado')}\n")
+                        elif module == "crlf":
+                            f.write(f"  * vector={r.get('vector','')} payload={r.get('payload','')[:50]}\n")
+                        elif module == "smuggling":
+                            f.write(f"  * tipo={r.get('tool') or r.get('type','')} detalle={str(r.get('note') or r.get('output_snippet',''))[:80]}\n")
+                        elif module == "cache_poisoning":
+                            confirmed = "confirmado" if r.get("confirmed") else "reflejado"
+                            f.write(f"  * header={r.get('header','')} valor={r.get('value','')[:40]} estado={confirmed}\n")
             else:
                 f.write("- No ejecutado\n")
             f.write("\n")
@@ -8344,7 +8488,71 @@ def run_advanced_security_tests(target, session):
     adv["cache_poisoning"] = safe_execute(test_cache_poisoning, target, session) or []
 
     SCAN_DATA["advanced_security"] = adv
-    total = sum(len(v) for v in adv.values() if isinstance(v, list))
+
+    # --- Tablas de resultados por modulo ---
+    sev_color = {
+        "critical": Fore.MAGENTA, "high": Fore.RED,
+        "medium": Fore.YELLOW, "low": Fore.CYAN, "info": Fore.WHITE,
+    }
+
+    def _sev_cell(sev):
+        s = (sev or "info").lower()
+        return f"{sev_color.get(s, '')}{s.upper()}{Style.RESET_ALL}"
+
+    if adv.get("ssrf"):
+        rows = []
+        for r in adv["ssrf"]:
+            t = r.get("type", "ssrf")
+            vector = r.get("param") or r.get("header") or "-"
+            payload = (r.get("payload") or r.get("value") or "")[:60]
+            rows.append([t, vector, payload, str(r.get("status", "-"))])
+        print_table(["Tipo", "Vector", "Payload/Valor", "HTTP"],
+                    rows, title="SSRF — Hallazgos",
+                    border_color=Fore.RED)
+
+    if adv.get("ssti"):
+        rows = [[r.get("url", "-")[:60], r.get("param", "-"),
+                 r.get("engine", "-")] for r in adv["ssti"]]
+        print_table(["URL", "Parametro", "Engine"],
+                    rows, title="SSTI — Hallazgos",
+                    border_color=Fore.RED)
+
+    if adv.get("xxe"):
+        rows = [[r.get("url", "-")[:60], r.get("content_type", "-"),
+                 r.get("note", "confirmado")] for r in adv["xxe"]]
+        print_table(["URL", "Content-Type", "Estado"],
+                    rows, title="XXE — Hallazgos",
+                    border_color=Fore.RED)
+
+    if adv.get("crlf"):
+        rows = [[r.get("vector", "-"), r.get("param") or r.get("url", "-")[:50],
+                 r.get("payload", "-")[:40]] for r in adv["crlf"]]
+        print_table(["Vector", "URL/Param", "Payload"],
+                    rows, title="CRLF Injection — Hallazgos",
+                    border_color=Fore.YELLOW)
+
+    if adv.get("smuggling"):
+        rows = [[r.get("tool") or r.get("type", "-"),
+                 r.get("note") or r.get("output_snippet", "-")[:60]] for r in adv["smuggling"]]
+        print_table(["Herramienta/Tipo", "Detalle"],
+                    rows, title="HTTP Request Smuggling — Hallazgos",
+                    border_color=Fore.RED)
+
+    if adv.get("cache_poisoning"):
+        rows = [[r.get("header", "-"), r.get("value", "-")[:40],
+                 "CONFIRMADO" if r.get("confirmed") else "REFLECTED"] for r in adv["cache_poisoning"]]
+        print_table(["Cabecera", "Valor inyectado", "Estado"],
+                    rows, title="Cache Poisoning — Hallazgos",
+                    border_color=Fore.YELLOW)
+
+    # Tabla resumen global.
+    module_names = ["ssrf", "ssti", "xxe", "crlf", "smuggling", "cache_poisoning"]
+    summary_rows = [[name.upper(), str(len(adv.get(name) or []))] for name in module_names]
+    total = sum(len(adv.get(n) or []) for n in module_names)
+    print_table(["Modulo", "Hallazgos"], summary_rows,
+                title="Pruebas Avanzadas — Resumen",
+                footer=f"  Total hallazgos: {total}",
+                border_color=Fore.CYAN)
     print_good(f"Pruebas avanzadas completadas. {total} hallazgos registrados.")
 
 
@@ -8792,6 +9000,12 @@ def print_final_summary(target):
         ["Kerberoastable SPNs", str(len(kerberoast_hashes))],
         ["Credenciales AD (NXC)", str(len(ad_creds))],
         ["Hallazgos en código fuente", str(len(src_findings))],
+        ["SSRF hallazgos", str(len((SCAN_DATA.get("advanced_security") or {}).get("ssrf") or []))],
+        ["SSTI hallazgos", str(len((SCAN_DATA.get("advanced_security") or {}).get("ssti") or []))],
+        ["XXE hallazgos", str(len((SCAN_DATA.get("advanced_security") or {}).get("xxe") or []))],
+        ["CRLF hallazgos", str(len((SCAN_DATA.get("advanced_security") or {}).get("crlf") or []))],
+        ["HTTP Smuggling hallazgos", str(len((SCAN_DATA.get("advanced_security") or {}).get("smuggling") or []))],
+        ["Cache Poisoning hallazgos", str(len((SCAN_DATA.get("advanced_security") or {}).get("cache_poisoning") or []))],
     ]
     print_table(
         headers=["Campo", "Valor"],
@@ -9058,6 +9272,46 @@ def print_final_summary(target):
             alignments=['<', '>'],
             title="Pruebas de inyección:",
         )
+
+    # 9b. Pruebas avanzadas
+    adv_sum = SCAN_DATA.get("advanced_security") or {}
+    if adv_sum:
+        module_names_fs = ["ssrf", "ssti", "xxe", "crlf", "smuggling", "cache_poisoning"]
+        adv_sum_rows = []
+        for mod in module_names_fs:
+            hits = adv_sum.get(mod) or []
+            color = Fore.RED if hits else Fore.WHITE
+            adv_sum_rows.append([mod.upper(), f"{color}{len(hits)}{Style.RESET_ALL}"])
+        print_table(
+            headers=["Modulo", "Hallazgos"],
+            rows=adv_sum_rows,
+            alignments=['<', '>'],
+            title="Pruebas Avanzadas de Seguridad:",
+        )
+        # Detalles solo si hay hallazgos.
+        for mod, headers_detail, row_fn in [
+            ("ssrf", ["Tipo", "Vector", "Payload/Valor", "HTTP"],
+             lambda r: [r.get("type","ssrf"), r.get("param") or r.get("header") or "-",
+                        _trim(r.get("payload") or r.get("value") or "", 50), str(r.get("status","-"))]),
+            ("ssti", ["URL", "Parametro", "Engine"],
+             lambda r: [_trim(r.get("url",""), 60), r.get("param","-"), r.get("engine","-")]),
+            ("xxe", ["URL", "Content-Type", "Estado"],
+             lambda r: [_trim(r.get("url",""), 60), r.get("content_type","-"), r.get("note","confirmado")]),
+            ("crlf", ["Vector", "URL/Param", "Payload"],
+             lambda r: [r.get("vector","-"), _trim(r.get("param") or r.get("url") or "",50), _trim(r.get("payload",""),40)]),
+            ("smuggling", ["Herramienta/Tipo", "Detalle"],
+             lambda r: [r.get("tool") or r.get("type","-"), _trim(r.get("note") or r.get("output_snippet") or "",80)]),
+            ("cache_poisoning", ["Cabecera", "Valor inyectado", "Estado"],
+             lambda r: [r.get("header","-"), _trim(r.get("value",""),40), "CONFIRMADO" if r.get("confirmed") else "REFLECTED"]),
+        ]:
+            hits = adv_sum.get(mod) or []
+            if hits:
+                print_table(
+                    headers=headers_detail,
+                    rows=[row_fn(r) for r in hits],
+                    title=f"{mod.upper()} — Detalle ({len(hits)}):",
+                    border_color=Fore.RED if mod in ("ssrf","ssti","xxe","smuggling") else Fore.YELLOW,
+                )
 
     # 10. Credenciales válidas
     if creds:

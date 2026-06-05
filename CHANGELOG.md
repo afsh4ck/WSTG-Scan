@@ -1,6 +1,6 @@
 # Registro de cambios
 
-## Sin publicar - 2026-06-05 (v1.3.0)
+## Sin publicar - 2026-06-05 (v1.3.1)
 
 ### Nuevos modulos
 
@@ -18,6 +18,17 @@
 - **JWT avanzado:** alg:none bypass activo (genera token modificado y comprueba si el servidor lo acepta), advertencia RS256->HS256 key confusion, deteccion de kid path traversal y kid SQLi, brute force de secreto HMAC con wordlist reducida (configurable), deteccion de token caducado aceptado.
 - **Rate limiting:** ademas de HTTP 429, detecta soft-block por latencia progresiva (factor 2.5x entre primeras y ultimas peticiones), captcha en respuesta, ban por IP (5+ respuestas 403 consecutivas).
 - Version bump a 1.3.0.
+
+## Sin publicar - 2026-06-05 (v1.3.1)
+
+### Reportes y tablas visuales para modulos avanzados
+
+- **Tablas CLI en run_advanced_security_tests:** tras cada sub-modulo se imprime una tabla box-drawing con los hallazgos (SSRF, SSTI, XXE, CRLF, Smuggling, Cache Poisoning) y una tabla resumen global al final con contador por modulo.
+- **Reporte HTML:** nueva seccion "Pruebas Avanzadas" con paneles independientes para cada modulo (resumen + SSRF + SSTI + XXE + CRLF + Smuggling + Cache Poisoning); KPI "Adv. Security" anadido al dashboard con icono shield-warning; la seccion solo aparece si el modulo fue ejecutado.
+- **Reporte Markdown:** bloque "## Pruebas Avanzadas de Seguridad" con tabla resumen y sub-secciones detalladas por modulo (solo si hay hallazgos).
+- **Reporte TXT:** bloque "[PRUEBAS AVANZADAS DE SEGURIDAD]" con lista por modulo y detalle de cada hallazgo.
+- **scan_stats:** seis nuevas metricas (adv_ssrf_hits, adv_ssti_hits, adv_xxe_hits, adv_crlf_hits, adv_smuggling_hits, adv_cache_hits) incluidas en el JSON de stats para trazabilidad.
+- **print_final_summary:** tabla ejecutiva ampliada con los seis contadores de pruebas avanzadas; tabla detallada por modulo con colores (rojo para criticos: SSRF/SSTI/XXE/Smuggling; amarillo para medios: CRLF/Cache) mostrada solo cuando hay hallazgos.
 
 ## Sin publicar - 2026-06-05
 
