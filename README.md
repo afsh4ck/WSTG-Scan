@@ -298,8 +298,12 @@ python3 wstg-scan.py -L targets.txt
 
 # Batch no interactivo: pentest completo por objetivo + un reporte por objetivo + resumen global
 python3 wstg-scan.py -L targets.txt --batch
+
+# Sin argumentos: el script pregunta si quieres una URL única o una lista
+python3 wstg-scan.py
 ```
 
+- Sin `-u`/`-L`, al arrancar se ofrece elegir: **1) URL única** o **2) Lista** (varias URLs separadas por coma/espacio, o ruta a un fichero), con opción de batch.
 - Las fuentes `-u` (repetible/coma) y `-L` (ficheros) se combinan y deduplican.
 - Cada objetivo mantiene su propio `SCAN_DATA`/`FINDINGS`; los reportes se guardan en `reports/<host>/`.
 - En batch, el módulo Active Directory se omite (no interactivo); el resto del pentest se ejecuta completo.

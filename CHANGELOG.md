@@ -7,6 +7,7 @@
 - **Lista de objetivos:** ademas de `-u` (ahora repetible y con varias URLs separadas por comas) se anade `-L/--list` para cargar ficheros con una URL por linea (admite comentarios `#` y lineas vacias). Las fuentes se combinan y deduplican normalizando la URL.
 - **Modo batch (`--batch`):** no interactivo. Ejecuta el pentest completo en cada objetivo, guarda un reporte por objetivo en `reports/<host>/` y muestra un resumen global con hallazgos por objetivo. El modulo Active Directory se omite en batch. Requiere `-u`/`-L`.
 - **Modo multi-objetivo interactivo:** al pasar mas de un objetivo sin `--batch`, el menu muestra la lista y cada opcion seleccionada se ejecuta secuencialmente en todos los objetivos. Cada objetivo mantiene su propio estado (`SCAN_DATA`/`FINDINGS`) entre modulos, de modo que se pueden encadenar varias pruebas y al salir se guarda un reporte por objetivo.
+- **Selector interactivo sin argumentos:** al ejecutar el script sin `-u`/`-L` se pregunta si el objetivo es una URL unica o una lista. En modo lista se aceptan varias URLs (coma/espacio) o la ruta a un fichero, y se ofrece elegir entre batch y multi interactivo.
 - **Estado por objetivo:** nueva factoria `_fresh_scan_data()` y helpers de reset/snapshot/restore para aislar el estado global entre objetivos sin reescribir los modulos existentes.
 - **Compatibilidad:** el flujo de un solo objetivo (interactivo) permanece igual; `run_full_pentest` acepta `interactive_ad` para poder omitir el prompt de Active Directory en batch.
 

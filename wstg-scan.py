@@ -9643,6 +9643,55 @@ def _collect_targets(args):
             targets.append(norm)
     return targets
 
+def _prompt_target_selection():
+    """Sin argumentos: pregunta objetivo unico o lista. Devuelve (targets, batch)."""
+    print("\nSelecciona el tipo de objetivo:")
+    print("  1. URL única")
+    print("  2. Lista de objetivos (varias URLs o un fichero)")
+    try:
+        choice = input("Opción [1]: ").strip() or "1"
+    except (KeyboardInterrupt, EOFError):
+        sys.exit(0)
+
+    if choice != "2":
+        try:
+            url = input("Introduce la URL objetivo: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            sys.exit(0)
+        return ([normalize_url(url)] if url else []), False
+
+    print("Introduce URLs separadas por coma o espacio, o la ruta a un fichero (.txt):")
+    try:
+        raw = input("Objetivos: ").strip()
+    except (KeyboardInterrupt, EOFError):
+        sys.exit(0)
+
+    candidates = []
+    expanded = os.path.expanduser(raw) if raw else ""
+    if expanded and os.path.isfile(expanded):
+        candidates = _read_target_file(expanded)
+    else:
+        candidates = [p for p in re.split(r'[\s,]+', raw) if p.strip()]
+
+    targets, seen = [], set()
+    for c in candidates:
+        norm = normalize_url(c)
+        if norm and norm not in seen:
+            seen.add(norm)
+            targets.append(norm)
+    if not targets:
+        print_error("No se introdujeron objetivos válidos.")
+        sys.exit(1)
+
+    try:
+        batch = input(
+            f"{len(targets)} objetivos cargados. ¿Modo batch "
+            f"(pentest completo automático por objetivo)? [s/N]: "
+        ).strip().lower() == 's'
+    except (KeyboardInterrupt, EOFError):
+        batch = False
+    return targets, batch
+
 def _reset_scan_state():
     """Estado limpio para empezar un objetivo desde cero."""
     global SCAN_DATA, AUTHENTICATED, AUTH_SESSION
@@ -9919,9 +9968,14 @@ def main():
         print_warning("Verificación TLS desactivada (--insecure). Solo para entornos de prueba.")
 
     targets = _collect_targets(args)
+    batch = args.batch
+
+    # Sin objetivos por CLI: selector interactivo (único o lista).
+    if not targets and not batch:
+        targets, batch = _prompt_target_selection()
 
     # Modo batch: requiere objetivos y no es interactivo.
-    if args.batch:
+    if batch:
         if not targets:
             print_error("El modo --batch requiere al menos un objetivo (-u/-L).")
             sys.exit(1)
