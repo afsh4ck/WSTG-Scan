@@ -332,8 +332,10 @@ developed by @afsh4ck
 13. Enumeración y ataques WordPress (WPScan)
 14. Pentesting Active Directory (Kerbrute/LDAP/NXC)
 15. PENTESTING COMPLETO (ejecuta todas las pruebas anteriores)
-16. Mostrar resumen en Markdown          (solo tras escanear)
-17. Mostrar tablas de resultados         (solo tras escanear)
+                                          (tras escanear aparecen)
+16. Mostrar resumen en Markdown
+17. Mostrar tablas de resultados
+                                          (siempre visible)
 18. Salir
 ====================================================
 Selecciona una opción:
@@ -345,7 +347,7 @@ Selecciona una opción:
 - **Opción 1** configura el login una sola vez: Basic Auth, formulario HTML, login headless Playwright (SPA/OAuth2) o sesión manual (cookie/token).
 - **Opción 10 — Pruebas avanzadas:** SSRF (parámetros URL + cabeceras + metadatos cloud), SSTI (Jinja2/Twig/FreeMarker/ERB), XXE, CRLF injection, HTTP Request Smuggling (via smuggler.py o prueba manual CL.TE) y Cache Poisoning.
 - **Opción 15 — Pentesting completo:** encadena automáticamente información → Nmap → Nuclei → vhost → directorios → spidering → código fuente → inyección → pruebas avanzadas → API → bruteforce → WordPress → Active Directory (opcional). Al terminar muestra todas las tablas y ofrece guardar el reporte.
-- **Opciones 16 y 17** solo aparecen cuando ya hay datos de un escaneo. Sirven para revisar resultados sin volver a escanear: la **16** imprime el resumen en Markdown (listo para pegar en GitBook/GitHub) y la **17** reimprime las tablas con el formato visual.
+- **Opciones 16 y 17** solo aparecen en el menú una vez que hay datos de algún escaneo. Sirven para revisar resultados sin volver a escanear: la **16** imprime el resumen en Markdown (listo para pegar en GitBook/GitHub) y la **17** reimprime las tablas visuales.
 
 ---
 
